@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "care-continuity"
+version = "0.3.0"
+description = "Consent-aware memory and follow-through for care assistants"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = []
+
+[project.scripts]
+care-continuity = "care_continuity.cli:main"
+care-continuity-sessions = "care_continuity.cli_sessions:main"
+care-continuity-web = "care_continuity.web:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+care_continuity = ["static/*.css"]
