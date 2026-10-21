@@ -19,8 +19,11 @@ Code lives in `src/care_continuity/`; tests live in `tests/`.
 | `domain.py` | Shared records, enums, errors, and clock types |
 | `store.py` | SQLite schema, migrations, transactions, and metadata-only events |
 | `consent.py` | Recipient, purpose, resource, operation, expiry, and revocation checks |
-| `memory.py` | Provenance, revisions, current views, history, and forgetting |
+| `memory.py` | Provenance, revisions, current views, history, forgetting, and observation contribution |
+| `conversation.py` | Provider-authorized context and ephemeral structured model suggestions |
+| `outbox.py` | Provider disclosure checks, durable jobs, attempt outcomes and transport boundary |
 | `delegation.py` | Request state transitions and authorization at delivery and action time |
+| `qualifications.py` | Private external-check attestations, exact scope, expiry, and revocation |
 | `knowledge.py` | Separate submission, review, retrieval, and withdrawal |
 | `sessions.py`, `circle.py` | Bearer sessions and care-circle membership |
 | `application.py` | Session-derived identity and operations composed across services |
@@ -33,7 +36,7 @@ Keep policy decisions in the services. Web and future model or voice adapters ca
 - Access is private by default. Family relationships, worker roles, and circle membership do not grant access. Scope permission to the person, recipient, purpose, resource, operation, and time.
 - Reading, sharing in a handover, and acting are separate permissions. Recheck authority before delivery, acceptance, completion, and subsequent reads.
 - Resolve the application actor from the session. Never trust an actor ID from form fields or another client payload. Session issuance is a privileged API used only after identity verification, or inside the local profile chooser.
-- A preference, another person's observation, and an interpretation stay distinct. Preserve provenance; do not silently replace the person's wishes with someone else's account.
+- A preference, another person's observation, and an interpretation stay distinct. Preserve provenance; do not silently replace the person's wishes with someone else's account. A circle member's observation stays private to the person until accepted; acceptance confirms review, not authorship, and the contributor remains the source.
 - Corrections use expected revisions. Request context pins memory revisions; a changed context requires a fresh approved draft rather than silently changing approved content.
 - Draft, delivered, accepted, and completed mean different things. Retries must not duplicate requests, grants, or actions. An unanswered request must remain visibly unanswered.
 - Revocation and forgetting must reach every application-controlled view and dependent copy. When adding caches, prompts, indexes, notifications, or exports, account for their dependencies and retention. Do not claim that logical deletion erases backups or recalls information already seen.

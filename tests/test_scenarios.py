@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from care_continuity import (
-    AccessDenied, Conflict, ConsentService, DelegationService, KnowledgeService,
+    AccessDenied, CircleService, Conflict, ConsentService, DelegationService, KnowledgeService,
     MemoryKind, MemoryService, Operation, RequestState, SQLiteStore,
 )
 
@@ -43,11 +43,12 @@ class CareScenarios(unittest.TestCase):
     def card(self, kind="experience", authorized=True):
         return self.knowledge.submit(contributor="writer", title="Visit experience",
                                      body="An example account for testing.", kind=kind, source="Example record",
-                                     publication_authorized=authorized)
+                                     publication_authorized=authorized, audience="Supporters", setting="Home",
+                                     language="en", limitations="Example only", publication_rights="Original fixture")
 
     def review(self, card):
         self.knowledge.review(card, actor="reviewer", review_due=self.now + timedelta(days=7),
-                              privacy_checked=True, scope_checked=True)
+                              privacy_checked=True, scope_checked=True, evidence="Example privacy, source and scope review")
 
     def test_private_by_default(self):
         self.assertEqual((), self.memory.summary(subject="mei", actor="daughter", purpose="visit"))
@@ -83,6 +84,30 @@ class CareScenarios(unittest.TestCase):
         self.assertEqual("Keep visits short.", self.memory.read(self.preference.id, actor="mei", purpose="manage").text)
         with self.assertRaises(ValueError):
             self.memory.remember(actor="mei", subject="mei", source="worker", text="She prefers long visits.")
+
+    def test_worker_observation_stays_separate_until_accepted(self):
+        circle = CircleService(self.store, self.clock)
+        circle.add(actor="mei", subject="mei", member="worker", role="worker")
+        observation = self.memory.observe(actor="worker", subject="mei", text="Mei smiled during the garden walk.")
+        with self.assertRaises(AccessDenied):
+            self.memory.read(observation.id, actor="worker", purpose="visit")
+        self.assertEqual((observation,), self.memory.observations_pending(subject="mei", actor="mei"))
+        accepted = self.memory.observation_accept(observation.id, actor="mei")
+        self.assertEqual(("observation", "worker", True), (accepted.kind.value, accepted.source, accepted.confirmed))
+        summary = self.memory.summary(subject="mei", actor="mei", purpose="manage")
+        self.assertIn("Keep visits short.", [item.text for item in summary])
+        self.assertIn(observation.id, [item.id for item in summary])
+        dismissed = self.memory.observe(actor="worker", subject="mei", text="Skipped lunch twice.")
+        self.memory.observation_dismiss(dismissed.id, actor="mei")
+        withdrawn = self.memory.observe(actor="worker", subject="mei", text="Watched television.")
+        self.memory.observation_withdraw(withdrawn.id, actor="worker")
+        remaining = [item.id for item in self.memory.summary(subject="mei", actor="mei", purpose="manage")]
+        self.assertNotIn(dismissed.id, remaining)
+        self.assertNotIn(withdrawn.id, remaining)
+        self.assertEqual((), self.memory.observations_pending(subject="mei", actor="mei"))
+        circle.remove(actor="mei", subject="mei", member="worker")
+        with self.assertRaises(AccessDenied):
+            self.memory.observe(actor="worker", subject="mei", text="After removal.")
 
     def test_relative_cannot_grant_or_change_permission(self):
         grant = self.grant()
@@ -232,10 +257,10 @@ class CareScenarios(unittest.TestCase):
         card = self.card()
         with self.assertRaises(AccessDenied):
             self.knowledge.review(card, actor="writer", review_due=self.now + timedelta(days=7),
-                                  privacy_checked=True, scope_checked=True)
+                                  privacy_checked=True, scope_checked=True, evidence="Example privacy, source and scope review")
         with self.assertRaises(ValueError):
             self.knowledge.review(card, actor="reviewer", review_due=self.now + timedelta(days=7),
-                                  privacy_checked=False, scope_checked=True)
+                                  privacy_checked=False, scope_checked=True, evidence="Example privacy, source and scope review")
 
     def test_professional_guidance_cannot_bypass_qualified_review(self):
         with self.assertRaises(Conflict):

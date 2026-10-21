@@ -19,7 +19,7 @@ The server binds only to loopback. Stopping it clears records and sessions held 
 4. Leave Mei's profile, choose **Lina**, and open **Inbox**. Accept the request, then mark it completed. Delivery, acceptance, and completion are separate states.
 5. Return to Mei. **Sharing** lists the grants and lets you revoke them individually. **Care circle** can end all of a person's access and cancel their unfinished requests.
 
-You can also record a follow-up plan, inspect activity history, or download a JSON account export. A due follow-up is displayed when you load the request list. There is no background scheduler or notification delivery.
+You can also record a follow-up plan and, once you have handled an unanswered request yourself, record the outcome from **My requests**. As a circle member, **Observations** lets you record what you noticed; the person then accepts or dismisses it from **My memories**. You can inspect activity history or download a JSON account export. A due follow-up is displayed when you load the request list. There is no background scheduler or notification delivery.
 
 ## Implementation
 
@@ -42,4 +42,22 @@ Pages use headings, landmarks, labelled fields, native buttons and disclosure co
 
 Manual verification covered the draft-to-completion flow in the in-app browser, the narrow layout, and keyboard activation of the skip link. These checks do not establish accessibility conformance. Full keyboard traversal, screen-reader testing, zoom and mobile testing, and sessions with older adults remain required.
 
-The first interface intentionally limits requests to a support visit with a seven-day permission window. Knowledge review, worker observation submissions, verified login, voice, and external delivery are not yet exposed.
+The first interface intentionally limits requests to a support visit with a seven-day permission window. Verified login, voice, and external delivery are not yet exposed. Knowledge contribution and review are available through **Knowledge**, using the [knowledge pilot walkthrough](knowledge.md#browser-workflow). The additional **Sam (demo reviewer)** profile has host-configured editorial authority for local examples only.
+
+The knowledge workflow was checked in the in-app browser with synthetic content: contribution,
+keyboard submission, profile switching, independent review, and library retrieval. The narrow
+layout was inspected visually. Automated tests additionally cover private draft isolation,
+escaping, withdrawal, invalid attestations, self-review, forged identity fields, session
+revocation and CSRF rejection. Screen-reader evaluation remains pending.
+
+## Delivery status
+
+**Deliveries** shows external jobs created through the trusted application integration.
+It distinguishes provider receipt from the request being accepted, explains uncertain
+outcomes, and links to the matching request and sharing controls. Refresh does not retry
+or reconcile delivery. The empty state explains that local mailbox requests stay in
+**My requests**. Browser approval still delivers only to the local mailbox.
+
+A synthetic uncertain delivery was checked in the in-app browser, including narrow layout,
+keyboard activation of Deliveries, the skip link and refresh focus, and navigation to the
+matching request. Screen-reader and user evaluation remain pending.

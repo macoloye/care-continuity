@@ -96,6 +96,8 @@ class DelegationService:
             self.consent.require_owner(actor, row["subject"])
             if row["state"] != "queued":
                 return RequestState(row["state"])
+            if self.store.connection.execute('SELECT 1 FROM delivery_jobs WHERE request_id=?', (request_id,)).fetchone():
+                raise Conflict('This request uses the external delivery outbox')
             try:
                 self._recipient_access(row, act=True)
             except (AccessDenied, Conflict):

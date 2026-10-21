@@ -50,6 +50,83 @@ class MemoryService:
         with self.store.transaction():
             return self._read(memory_id, actor, purpose)
 
+    def observe(self, *, actor: str, subject: str, text: str) -> Memory:
+        """A care-circle member records an observation; only the person may accept it."""
+        required(subject, "subject")
+        required(text, "text")
+        if actor == subject:
+            raise ValueError("Record the person's own account with remember")
+        # Circle membership is the contribution boundary; disclosure still needs grants.
+        member = self.store.connection.execute(
+            "SELECT 1 FROM care_circle WHERE subject=? AND member=? AND removed_at IS NULL",
+            (subject, actor)).fetchone()
+        if member is None:
+            raise AccessDenied("Only an active care-circle member may record an observation")
+        memory_id, at = str(uuid4()), timestamp(self.clock())
+        with self.store.transaction() as db:
+            db.execute("INSERT INTO memories VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, 0)",
+                       (memory_id, subject, MemoryKind.OBSERVATION.value, text, actor, False, at, at))
+            db.execute("INSERT INTO memory_history VALUES (?, 1, ?, ?, ?, ?)",
+                       (memory_id, text, actor, False, at))
+            self.store.event(subject, actor, memory_id, "memory.observed", at)
+            return self._record(db.execute("SELECT * FROM memories WHERE id=?", (memory_id,)).fetchone())
+
+    def observations_pending(self, *, subject: str, actor: str) -> tuple[Memory, ...]:
+        """Owner-only review inbox; pending observations stay invisible to others."""
+        self.consent.require_owner(actor, subject)
+        rows = self.store.connection.execute(
+            """SELECT * FROM memories WHERE subject=? AND kind=? AND confirmed=0 AND deleted=0
+               ORDER BY created_at, id""", (subject, MemoryKind.OBSERVATION.value)).fetchall()
+        return tuple(self._record(row) for row in rows)
+
+    def observation_accept(self, memory_id: str, *, actor: str) -> Memory:
+        """Acceptance confirms review; authorship stays with the contributor."""
+        with self.store.transaction() as db:
+            row = db.execute("SELECT * FROM memories WHERE id=? AND deleted=0", (memory_id,)).fetchone()
+            if row is None:
+                raise AccessDenied("Observation unavailable")
+            self.consent.require_owner(actor, row["subject"])
+            if row["kind"] != MemoryKind.OBSERVATION.value or row["confirmed"]:
+                raise Conflict("Only an unreviewed observation can be accepted")
+            revision, at = row["revision"] + 1, timestamp(self.clock())
+            db.execute("UPDATE memories SET confirmed=1, revision=?, updated_at=? WHERE id=?",
+                       (revision, at, memory_id))
+            db.execute("INSERT INTO memory_history VALUES (?, ?, ?, ?, ?, ?)",
+                       (memory_id, revision, row["text"], row["source"], True, at))
+            self.store.event(row["subject"], actor, memory_id, "memory.observation_accepted", at)
+            return self._record(db.execute("SELECT * FROM memories WHERE id=?", (memory_id,)).fetchone())
+
+    def _pending_observation(self, memory_id: str, *, actor: str, contributor: bool) -> Row:
+        row = self.store.connection.execute(
+            "SELECT * FROM memories WHERE id=? AND deleted=0", (memory_id,)).fetchone()
+        if row is None or row["kind"] != MemoryKind.OBSERVATION.value or row["confirmed"]:
+            raise Conflict("Only an unreviewed observation can be removed")
+        if contributor:
+            if row["source"] != actor:
+                raise AccessDenied("Only the contributor may withdraw this observation")
+        else:
+            self.consent.require_owner(actor, row["subject"])
+        return row
+
+    def observation_dismiss(self, memory_id: str, *, actor: str) -> None:
+        """The person rejects the observation before it ever enters a shared summary."""
+        with self.store.transaction():
+            row = self._pending_observation(memory_id, actor=actor, contributor=False)
+            self._purge(memory_id, row["subject"], actor, "memory.observation_dismissed")
+
+    def observation_withdraw(self, memory_id: str, *, actor: str) -> None:
+        """The contributor takes back an observation before the person reviews it."""
+        with self.store.transaction():
+            row = self._pending_observation(memory_id, actor=actor, contributor=True)
+            self._purge(memory_id, row["subject"], actor, "memory.observation_withdrawn")
+
+    def observations_by(self, *, actor: str) -> list[dict]:
+        """A contributor sees the review status of their own observations only."""
+        return [dict(row, status="accepted" if row["confirmed"] else "pending")
+                for row in self.store.connection.execute(
+                    """SELECT * FROM memories WHERE source=? AND kind=? AND deleted=0
+                       ORDER BY created_at, id""", (actor, MemoryKind.OBSERVATION.value))]
+
     def revise(self, memory_id: str, *, actor: str, text: str,
                expected_revision: int, confirmed: bool = True) -> Memory:
         required(text, "text")
@@ -83,20 +160,25 @@ class MemoryService:
                 "SELECT * FROM memory_history WHERE memory_id=? ORDER BY revision", (memory_id,))]
 
     def forget(self, memory_id: str, *, actor: str) -> None:
-        with self.store.transaction() as db:
+        with self.store.transaction():
             memory = self._read(memory_id, actor, "manage")
             self.consent.require_owner(actor, memory.subject)
-            at = timestamp(self.clock())
-            db.execute("DELETE FROM memory_history WHERE memory_id=?", (memory_id,))
-            db.execute("UPDATE memories SET text='', source='', confirmed=0, deleted=1, updated_at=? WHERE id=?",
-                       (at, memory_id))
-            db.execute("UPDATE grants SET revoked_at=? WHERE resource_type='memory' AND resource_id=? AND revoked_at IS NULL",
-                       (at, memory_id))
-            # Linked drafts might quote the forgotten item. Redact them conservatively.
-            db.execute("""UPDATE requests SET message='', updated_at=?,
-                       state=CASE WHEN state='completed' THEN state ELSE 'cancelled' END
-                       WHERE id IN (SELECT request_id FROM request_context WHERE memory_id=?)""",
-                       (at, memory_id))
-            db.execute("""UPDATE followups SET alternative='', updated_at=? WHERE request_id IN
-                       (SELECT request_id FROM request_context WHERE memory_id=?)""", (at, memory_id))
-            self.store.event(memory.subject, actor, memory_id, "memory.forgotten", at)
+            self._purge(memory_id, memory.subject, actor, "memory.forgotten")
+
+    def _purge(self, memory_id: str, subject: str, actor: str, action: str) -> None:
+        """Logical deletion that reaches grants, linked messages, and follow-up text."""
+        at = timestamp(self.clock())
+        db = self.store.connection
+        db.execute("DELETE FROM memory_history WHERE memory_id=?", (memory_id,))
+        db.execute("UPDATE memories SET text='', source='', confirmed=0, deleted=1, updated_at=? WHERE id=?",
+                   (at, memory_id))
+        db.execute("UPDATE grants SET revoked_at=? WHERE resource_type='memory' AND resource_id=? AND revoked_at IS NULL",
+                   (at, memory_id))
+        # Linked drafts might quote the forgotten item. Redact them conservatively.
+        db.execute("""UPDATE requests SET message='', updated_at=?,
+                   state=CASE WHEN state='completed' THEN state ELSE 'cancelled' END
+                   WHERE id IN (SELECT request_id FROM request_context WHERE memory_id=?)""",
+                   (at, memory_id))
+        db.execute("""UPDATE followups SET alternative='', resolution='', updated_at=? WHERE request_id IN
+                   (SELECT request_id FROM request_context WHERE memory_id=?)""", (at, memory_id))
+        self.store.event(subject, actor, memory_id, action, at)

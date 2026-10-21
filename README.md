@@ -34,19 +34,21 @@ The sessions walkthrough exercises separate owner and caregiver sessions, a cons
 
 Run `care-continuity-web`, then open [the local application](http://127.0.0.1:8765). Without installation, use `PYTHONPATH=src python3 -m care_continuity.web`. Pass `--db PATH` to keep records in an SQLite file between runs; by default they are held in memory.
 
-Choose a profile to edit memories, review sharing, approve a request, or accept it from the caregiver's inbox. The interface works without JavaScript. See the [walkthrough and implementation notes](docs/web.md).
+Choose a profile to edit memories, review sharing, approve a request, accept it from the caregiver's inbox, or record an observation for the person to review. The interface works without JavaScript. See the [walkthrough and implementation notes](docs/web.md).
 
 ## What works
 
 | Component | Current behavior |
 | --- | --- |
-| Memory | Attributed preferences, observations, and interpretations; revisions; owner-only history; forgetting; current memory summaries. |
+| Memory | Attributed preferences, observations, and interpretations; revisions; owner-only history; forgetting; current memory summaries; circle-member observations with owner approval. |
 | Consent | Exact recipient, purpose, resource, operation, and expiry; explicit revocation; no automatic family or staff access. |
 | Delegation | Draft, queue, local delivery, acceptance, completion, cancellation, and blocked delivery; idempotent retries. |
-| Knowledge | Separately authorized submissions; independent review of experience and procedures; expiry and withdrawal. |
+| Knowledge | Session-bound private submissions; audience, setting and language metadata; publication-rights evidence; independent review history; scoped qualification records with expiry and revocation; contributor withdrawal. |
+| Delivery outbox | Durable jobs, separate provider consent, leases, safe retries, unknown outcomes and trusted receipt reconciliation; no live transport configured. |
+| Model suggestions | Replaceable host-configured adapter boundary, explicit provider consent, selected revisions, structured suggestions and explicit reviewed-draft saving; no live model configured. |
 | Persistence | SQLite records and transactions, with metadata-only audit events. |
-| Application | Revocable bearer sessions, care-circle management, filtered inboxes, owner request views, follow-up deadlines, and account export. |
-| Browser app | Memory editing, explicit sharing preview, request lifecycle, care-circle removal, history, and export through local forms. |
+| Application | Revocable bearer sessions, care-circle management, filtered inboxes, owner request views, follow-up deadlines and recorded outcomes, observation review, and account export. |
+| Browser app | Memory editing, explicit sharing preview, request lifecycle, observation contribution and review, follow-up outcomes, care-circle removal, history, export, and knowledge contribution, review, search and withdrawal through local forms. |
 
 The first release still needs broader accessibility testing, a verified identity-provider integration, model and voice adapters, reviewed knowledge cards, and care-partner evaluation. See the [technical plan](docs/technical-plan.md) for milestones and acceptance criteria.
 
@@ -71,6 +73,9 @@ with SQLiteStore() as store:  # Pass a file path for persistence.
 
 Actor IDs in this example are supplied by trusted application code. They are not authentication credentials. An HTTP adapter must derive the actor from a verified session before calling the library.
 
+- [Model suggestion boundary](docs/conversation.md)
+- [Durable delivery API and limits](docs/delivery.md)
+- [Knowledge pilot API and remaining requirements](docs/knowledge.md)
 - [Technical plan and implementation status](docs/technical-plan.md)
 - [API behavior and boundaries](docs/api.md)
 - [Session-bound application API](docs/application.md)

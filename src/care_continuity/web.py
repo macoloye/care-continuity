@@ -31,7 +31,7 @@ class WebApp:
 
     def __init__(self, store: SQLiteStore) -> None:
         self.store = store
-        self.app = CareApplication(store)
+        self.app = CareApplication(store, reviewers=frozenset({"reviewer"}))
         self.sessions = SessionService(store)
         self._csrf_key = token_urlsafe(32).encode()
         token = self.sessions.issue("mei")
@@ -87,12 +87,32 @@ class WebApp:
                 raise AccessDenied("Draft unavailable")
             title = "Review before sharing"
             body = views.preview(request, csrf, timestamp(self.app.clock() + timedelta(days=7)))
+        elif path == "/knowledge":
+            query = parse_qs(urlsplit(target).query, keep_blank_values=True)
+            search = self.one(query, "q") if "q" in query else ""
+            title, body = "Knowledge library", views.knowledge_library(self.app.search_knowledge(token, search), search)
+        elif path == "/knowledge/submissions":
+            title, body = "Knowledge submissions", views.knowledge_submissions(
+                self.app.knowledge_submissions(token), actor)
+        elif path == "/knowledge/new":
+            title, body = "Contribute a knowledge card", views.knowledge_form(csrf)
+        elif path == "/knowledge/review":
+            card_id = self.one(parse_qs(urlsplit(target).query), "id")
+            evidence = self.app.knowledge_evidence(token, card_id)
+            card = next(card for card in self.app.knowledge_submissions(token) if card.id == card_id)
+            title, body = "Inspect knowledge submission", views.knowledge_review(card, evidence, actor, csrf)
+        elif path == "/deliveries":
+            title, body = "Delivery status", views.deliveries(self.app.deliveries(token))
         elif path == "/inbox":
             title, body = "My inbox", views.inbox(self.app.inbox(token), csrf)
+        elif path == "/observations":
+            title, body = "My observations", views.observations(
+                self.app.my_observations(token), self.app.circle_subjects(token), csrf)
         elif path in ("/", "/memories", "/circle", "/sharing", "/requests", "/history"):
             account = self.app.export(token)
             if path == "/memories":
-                title, body = "What matters to me", views.memories(account, csrf)
+                title, body = "What matters to me", views.memories(
+                    account, csrf, self.app.pending_observations(token))
             elif path == "/circle":
                 title, body = "My care circle", views.circle(account, actor, csrf)
             elif path == "/sharing":
@@ -124,12 +144,18 @@ class WebApp:
         if not hmac.compare_digest(csrf, self.csrf(token)):
             raise AccessDenied("This form expired. Reload the page and try again")
         fields = {
+            "/knowledge/submit": {"title", "body", "kind", "source", "audience", "setting", "language",
+                                  "limitations", "publication_rights", "publication_authorized"},
+            "/knowledge/publish": {"id", "days", "privacy_checked", "scope_checked", "evidence"},
+            "/knowledge/withdraw": {"id"},
             "/login": {"profile"}, "/logout": set(),
             "/memory/save": {"text"}, "/memory/revise": {"id", "text", "revision"},
             "/memory/forget": {"id"}, "/circle/add": {"member", "role"}, "/circle/remove": {"member"},
             "/sharing/revoke": {"id"}, "/request/draft": {"recipient", "message", "memory", "key"},
             "/request/approve": {"id", "expires"}, "/request/transition": {"id", "state"},
-            "/request/followup": {"id", "hours", "alternative"},
+            "/request/followup": {"id", "hours", "alternative"}, "/request/resolve": {"id", "note"},
+            "/observation/submit": {"subject", "text"}, "/observation/accept": {"id"},
+            "/observation/dismiss": {"id"}, "/observation/withdraw": {"id"},
         }
         if path not in fields:
             return self.error(404, "Action not found", token)
@@ -152,6 +178,23 @@ class WebApp:
             result = self.redirect("/")
             result.headers["Set-Cookie"] = self.cookie("")
             return result
+        if path == "/knowledge/submit":
+            card_id = self.app.submit_knowledge(token,
+                **{key: value(key) for key in ("title", "body", "kind", "source", "audience", "setting",
+                                               "language", "limitations", "publication_rights")},
+                publication_authorized=value("publication_authorized") == "yes")
+            return self.redirect("/knowledge/review?" + urlencode({"id": card_id}))
+        if path == "/knowledge/publish":
+            days = int(value("days"))
+            if not 1 <= days <= 365:
+                raise ValueError("Choose a review interval between 1 and 365 days")
+            self.app.review_knowledge(token, value("id"), review_due=self.app.clock() + timedelta(days=days),
+                privacy_checked=value("privacy_checked") == "yes", scope_checked=value("scope_checked") == "yes",
+                evidence=value("evidence"))
+            return self.redirect("/knowledge/review?" + urlencode({"id": value("id")}))
+        if path == "/knowledge/withdraw":
+            self.app.withdraw_knowledge(token, value("id"))
+            return self.redirect("/knowledge/submissions")
         if path == "/memory/save":
             self.app.remember(token, text=value("text"), confirmed=True)
             return self.redirect("/memories")
@@ -189,6 +232,21 @@ class WebApp:
                 raise ValueError("Unsupported action")
             self.app.transition(token, value("id"), state=state)
             return self.redirect("/requests" if state == RequestState.CANCELLED else "/inbox")
+        if path == "/request/resolve":
+            self.app.resolve_followup(token, value("id"), note=value("note"))
+            return self.redirect("/requests")
+        if path == "/observation/submit":
+            self.app.observe(token, subject=value("subject"), text=value("text"))
+            return self.redirect("/observations")
+        if path == "/observation/accept":
+            self.app.accept_observation(token, value("id"))
+            return self.redirect("/memories")
+        if path == "/observation/dismiss":
+            self.app.dismiss_observation(token, value("id"))
+            return self.redirect("/memories")
+        if path == "/observation/withdraw":
+            self.app.withdraw_observation(token, value("id"))
+            return self.redirect("/observations")
         hours = int(value("hours"))
         if not 1 <= hours <= 168:
             raise ValueError("Choose between 1 and 168 hours")

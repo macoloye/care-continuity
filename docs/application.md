@@ -30,7 +30,8 @@ Tokens are random bearer secrets. Only their SHA-256 digests are stored. They ex
 | Sharing | `grant`, `revoke`, `sharing` | Exact grants to active members; current effective status shown |
 | Requests | `create_request`, `read_request`, `approve_request`, `queue`, `dispatch`, `transition` | Existing approval and lifecycle rules with session-derived identity |
 | Views | `inbox`, `requests` | Filtered recipient content and owner metadata views |
-| Follow-up | `plan_followup` | Persist an owner-selected deadline and alternative before acceptance |
+| Follow-up | `plan_followup`, `resolve_followup` | Persist an owner-selected deadline and alternative; record the outcome once handled |
+| Observation | `observe`, `pending_observations`, `accept_observation`, `dismiss_observation`, `withdraw_observation`, `my_observations`, `circle_subjects` | Active members contribute observations; only the person accepts or dismisses; contributors see only their own submissions |
 | Export | `export` | Consistent JSON-compatible account snapshot |
 | Session | `logout` | Idempotent revocation |
 
@@ -46,7 +47,7 @@ An inbox lists only requests the current recipient can still read. Revoked, stal
 
 The owner's `requests` view includes IDs, recipient, state, timestamps, and follow-up status even if context has changed or been deleted. Such entries have `content_available=False`, `message=None`, and empty context. The person can inspect the status and prepare a replacement without reviving old text.
 
-`plan_followup` records a future deadline and an alternative chosen by the person. At the deadline, an unanswered draft, queued, or delivered request has `needs_followup=True`. Acceptance or cancellation clears that derived flag. This is a view calculated when called, not a scheduler or notification service. The alternative is owner-only and does not authorize sending another request.
+`plan_followup` records a future deadline and an alternative chosen by the person. At the deadline, an unanswered draft, queued, or delivered request has `needs_followup=True`. Acceptance or cancellation clears that derived flag. `resolve_followup` records how the person handled the request and clears the flag without changing the request state; replanning afterwards starts a fresh follow-up. This is a view calculated when called, not a scheduler or notification service. The alternative and the recorded outcome are owner-only and do not authorize sending another request.
 
 ## Export and deletion
 
@@ -56,6 +57,31 @@ Deleted memory and revision text are excluded. Forgetting also redacts linked re
 
 ## Database upgrade
 
-Opening a version 1 database upgrades it to version 2 in a transaction, adding sessions, circle membership, and follow-up tables without rewriting existing care records. Reopening version 2 is a no-op. Unknown versions fail closed. Failed upgrades roll back the schema and version marker together.
+Opening a version 1 or version 2 database upgrades it transactionally: version 2 adds sessions, circle membership, and follow-up tables, and version 3 adds follow-up resolution columns. Neither upgrade rewrites existing care records, and reopening the current version is a no-op. Unknown versions fail closed. Failed upgrades roll back the schema and version marker together.
 
 Service transactions now support nesting through SQLite savepoints. The application holds the outer transaction so a session revocation or circle removal cannot interleave between authorization and the corresponding database operation. Keep network calls outside these transactions.
+
+## Knowledge pilot API
+
+Configure trusted reviewer IDs using `CareApplication(store, reviewers=frozenset({...}))`.
+`submit_knowledge`, `knowledge_submissions`, `knowledge_evidence`, `review_knowledge`,
+`withdraw_knowledge`, and `search_knowledge` derive identity from the bearer session.
+Contributors cannot choose a different author or reviewer in the payload. Reviewer
+configuration is privileged host configuration, not a form field or proof of professional
+qualification. The [knowledge pilot guide](knowledge.md) provides the complete workflow.
+
+Qualification verifiers are separately configured with
+`CareApplication(..., qualification_verifiers=frozenset({...}))`.
+`record_qualification`, `qualifications`, and `revoke_qualification` derive the verifier or
+reader from the session. The record's `reviewer` identifies the subject of the external
+check, not the actor performing it. The local browser deliberately configures no verifiers.
+See the [qualification example](knowledge.md#qualification-records) for trusted-host usage.
+
+## Durable delivery
+
+After previewing the provider as a separate disclosure recipient, use
+`authorize_delivery_provider(token, request_id, provider=..., expires_at=...)` to grant its
+exact request and context access. Queue with ordinary supporter permissions, then call
+`enqueue_delivery(token, request_id, provider=...)`. `deliveries(token)` lists only that
+owner's delivery metadata. The worker is a trusted host API, not a browser operation.
+See [delivery](delivery.md) for the complete synthetic example and current limits.

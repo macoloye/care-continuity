@@ -12,20 +12,27 @@ from typing import Iterator
 from .circle import CircleService
 from .consent import ConsentService
 from .delegation import DelegationService
-from .domain import AccessDenied, Clock, Conflict, Memory, Operation, RequestState, SupportRequest, required, timestamp, utc_now
+from .domain import AccessDenied, Clock, Conflict, KnowledgeCard, Memory, Operation, RequestState, SupportRequest, required, timestamp, utc_now
 from .memory import MemoryService
+from .knowledge import KnowledgeService
+from .qualifications import QualificationService
+from .outbox import OutboxService
 from .sessions import SessionService
 from .store import SQLiteStore
 
 
 class CareApplication:
-    def __init__(self, store: SQLiteStore, clock: Clock = utc_now) -> None:
+    def __init__(self, store: SQLiteStore, clock: Clock = utc_now, *,
+                 reviewers: frozenset[str] = frozenset(),
+                 qualification_verifiers: frozenset[str] = frozenset()) -> None:
         self.store, self.clock = store, clock
         self._sessions = SessionService(store, clock)
         self._consent = ConsentService(store, clock)
         self._memory = MemoryService(store, self._consent, clock)
         self._requests = DelegationService(store, self._consent, self._memory, clock)
         self._circle = CircleService(store, clock)
+        self._knowledge = KnowledgeService(store, reviewers=reviewers, clock=clock)
+        self._qualifications = QualificationService(store, verifiers=qualification_verifiers, clock=clock)
 
     @contextmanager
     def _actor(self, token: str) -> Iterator[str]:
@@ -50,6 +57,40 @@ class CareApplication:
     def memories(self, token: str, *, subject: str, purpose: str) -> tuple[Memory, ...]:
         with self._actor(token) as actor:
             return self._memory.summary(subject=subject, actor=actor, purpose=purpose)
+
+    def observe(self, token: str, *, subject: str, text: str) -> Memory:
+        """A circle member records an observation about the person for review."""
+        with self._actor(token) as actor:
+            return self._memory.observe(actor=actor, subject=subject, text=text)
+
+    def pending_observations(self, token: str) -> tuple[Memory, ...]:
+        """Owner-only review inbox for unconfirmed observations."""
+        with self._actor(token) as actor:
+            return self._memory.observations_pending(subject=actor, actor=actor)
+
+    def accept_observation(self, token: str, memory_id: str) -> Memory:
+        with self._actor(token) as actor:
+            return self._memory.observation_accept(memory_id, actor=actor)
+
+    def dismiss_observation(self, token: str, memory_id: str) -> None:
+        with self._actor(token) as actor:
+            self._memory.observation_dismiss(memory_id, actor=actor)
+
+    def withdraw_observation(self, token: str, memory_id: str) -> None:
+        with self._actor(token) as actor:
+            self._memory.observation_withdraw(memory_id, actor=actor)
+
+    def my_observations(self, token: str) -> list[dict]:
+        """A contributor's own submissions with their review status."""
+        with self._actor(token) as actor:
+            return self._memory.observations_by(actor=actor)
+
+    def circle_subjects(self, token: str) -> list[str]:
+        """People whose care circle currently includes the actor."""
+        with self._actor(token) as actor:
+            return [row["subject"] for row in self.store.connection.execute(
+                """SELECT subject FROM care_circle WHERE member=? AND removed_at IS NULL
+                   ORDER BY subject""", (actor,))]
 
     def add_member(self, token: str, *, member: str, role: str) -> None:
         with self._actor(token) as actor:
@@ -150,23 +191,47 @@ class CareApplication:
             at, due = timestamp(self.clock()), timestamp(due_at)
             if due <= at:
                 raise ValueError("Choose a future follow-up time")
-            self.store.connection.execute("""INSERT INTO followups VALUES (?, ?, ?, ?)
+            self.store.connection.execute("""INSERT INTO followups(request_id, due_at, alternative, updated_at)
+                VALUES (?, ?, ?, ?)
                 ON CONFLICT(request_id) DO UPDATE SET due_at=excluded.due_at,
-                alternative=excluded.alternative, updated_at=excluded.updated_at""",
+                alternative=excluded.alternative, updated_at=excluded.updated_at,
+                resolved_at=NULL, resolution=NULL""",
                 (request_id, due, alternative, at))
             self.store.event(actor, actor, request_id, "request.followup_planned", at)
+
+    def resolve_followup(self, token: str, request_id: str, *, note: str) -> None:
+        """Record how the person handled an unanswered request; no reminder is sent."""
+        required(note, "note")
+        with self._actor(token) as actor:
+            row = self._requests._row(request_id)
+            self._consent.require_owner(actor, row["subject"])
+            if row["state"] not in ("draft", "queued", "delivered"):
+                raise Conflict("Follow-up is only available before acceptance")
+            followup = self.store.connection.execute(
+                "SELECT * FROM followups WHERE request_id=?", (request_id,)).fetchone()
+            if followup is None:
+                raise Conflict("Plan a follow-up before recording its outcome")
+            if followup["resolved_at"] is not None:
+                raise Conflict("This follow-up has already been resolved")
+            at = timestamp(self.clock())
+            self.store.connection.execute(
+                """UPDATE followups SET resolved_at=?, resolution=?, updated_at=?
+                   WHERE request_id=? AND resolved_at IS NULL""", (at, note, at, request_id))
+            self.store.event(actor, actor, request_id, "request.followup_resolved", at)
 
     def _owner_requests(self, actor: str) -> list[dict]:
         rows = self.store.connection.execute(
             """SELECT r.id, r.recipient, r.purpose, r.state, r.created_at, r.updated_at,
-               f.due_at, f.alternative FROM requests r LEFT JOIN followups f ON f.request_id=r.id
+               f.due_at, f.alternative, f.resolved_at, f.resolution
+               FROM requests r LEFT JOIN followups f ON f.request_id=r.id
                WHERE r.subject=? ORDER BY r.created_at, r.id""", (actor,)).fetchall()
         result = []
         now = timestamp(self.clock())
         for row in rows:
             item = dict(row)
             item["needs_followup"] = bool(row["due_at"] and row["due_at"] <= now
-                                           and row["state"] in ("draft", "queued", "delivered"))
+                                           and row["state"] in ("draft", "queued", "delivered")
+                                           and row["resolved_at"] is None)
             try:
                 request = self._requests.read(row["id"], actor=actor)
                 item.update(content_available=True, message=request.message,
@@ -194,3 +259,90 @@ class CareApplication:
                 "requests": self._owner_requests(actor),
                 "events": self._requests.history(actor=actor, subject=actor),
             }
+
+    def submit_knowledge(self, token: str, *, title: str, body: str, kind: str,
+                         source: str, audience: str, setting: str, language: str,
+                         limitations: str, publication_rights: str,
+                         publication_authorized: bool = False) -> str:
+        with self._actor(token) as actor:
+            return self._knowledge.submit(
+                contributor=actor, title=title, body=body, kind=kind, source=source,
+                audience=audience, setting=setting, language=language, limitations=limitations,
+                publication_rights=publication_rights, publication_authorized=publication_authorized)
+
+    def knowledge_submissions(self, token: str) -> tuple[KnowledgeCard, ...]:
+        with self._actor(token) as actor:
+            return self._knowledge.submissions(actor=actor)
+
+    def knowledge_evidence(self, token: str, card_id: str) -> dict:
+        with self._actor(token) as actor:
+            return self._knowledge.evidence(card_id, actor=actor)
+
+    def review_knowledge(self, token: str, card_id: str, *, review_due: datetime,
+                         privacy_checked: bool, scope_checked: bool, evidence: str,
+                         qualification_id: str | None = None) -> None:
+        with self._actor(token) as actor:
+            self._knowledge.review(card_id, actor=actor, review_due=review_due,
+                                   privacy_checked=privacy_checked, scope_checked=scope_checked,
+                                   evidence=evidence, qualification_id=qualification_id)
+
+    def withdraw_knowledge(self, token: str, card_id: str) -> None:
+        with self._actor(token) as actor:
+            self._knowledge.withdraw(card_id, actor=actor)
+
+    def search_knowledge(self, token: str, query: str = "") -> tuple[KnowledgeCard, ...]:
+        with self._actor(token):
+            return self._knowledge.search(query)
+
+    def record_qualification(self, token: str, *, reviewer: str, kind: str, setting: str,
+                             language: str, evidence: str, expires_at: datetime,
+                             idempotency_key: str) -> str:
+        with self._actor(token) as actor:
+            return self._qualifications.record(actor=actor, reviewer=reviewer, kind=kind,
+                setting=setting, language=language, evidence=evidence, expires_at=expires_at,
+                idempotency_key=idempotency_key)
+
+    def qualifications(self, token: str, *, reviewer: str) -> list[dict]:
+        with self._actor(token) as actor:
+            return self._qualifications.list_records(actor=actor, reviewer=reviewer)
+
+    def revoke_qualification(self, token: str, qualification_id: str) -> None:
+        with self._actor(token) as actor:
+            self._qualifications.revoke(qualification_id, actor=actor)
+
+    def enqueue_delivery(self, token: str, request_id: str, *, provider: str) -> str:
+        """Queue external delivery after explicit recipient and provider grants."""
+        with self._actor(token) as actor:
+            return OutboxService(self.store, self.clock).enqueue(request_id, actor=actor, provider=provider)
+
+    def deliveries(self, token: str) -> list[dict]:
+        with self._actor(token) as actor:
+            return OutboxService(self.store, self.clock).jobs(actor=actor)
+
+    def authorize_delivery_provider(self, token: str, request_id: str, *, provider: str,
+                                    expires_at: datetime) -> None:
+        """Approve disclosure of the previewed request and context to this provider.
+
+        This does not grant provider action authority or care-circle membership.
+        """
+        required(provider, "provider")
+        with self._actor(token) as actor:
+            row = self._requests._row(request_id)
+            self._consent.require_owner(actor, row["subject"])
+            if row["state"] not in ("draft", "queued"):
+                raise Conflict("Provider consent requires an unfinished delivery draft")
+            if provider in (actor, row["recipient"]):
+                raise ValueError("Use a distinct transport provider identity")
+            request = self._requests.read(request_id, actor=actor)
+            resources = [("request", request_id)] + [("memory", memory.id) for memory in request.context]
+            for resource_type, resource_id in resources:
+                for operation in (Operation.READ, Operation.SHARE):
+                    existing = self.store.connection.execute("""SELECT 1 FROM grants WHERE subject=?
+                        AND recipient=? AND purpose=? AND resource_type=? AND resource_id=? AND operation=?
+                        AND expires_at=? AND expires_at>? AND revoked_at IS NULL""",
+                        (actor, provider, request.purpose, resource_type, resource_id, operation.value,
+                         timestamp(expires_at), timestamp(self.clock()))).fetchone()
+                    if existing:
+                        continue
+                    self._consent.grant(actor=actor, subject=actor, recipient=provider, purpose=request.purpose,
+                        resource_type=resource_type, resource_id=resource_id, operation=operation, expires_at=expires_at)

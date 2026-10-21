@@ -7,8 +7,8 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from care_continuity import AccessDenied, CareApplication, Conflict, Operation, RequestState, SessionService, SQLiteStore
-from care_continuity.store import SCHEMA
+from care_continuity import AccessDenied, CareApplication, Conflict, MemoryKind, Operation, RequestState, SessionService, SQLiteStore
+from care_continuity.store import SCHEMA, SESSION_SCHEMA
 
 
 class ApplicationTests(unittest.TestCase):
@@ -155,6 +155,120 @@ class ApplicationTests(unittest.TestCase):
         self.assertEqual("cancelled", exported["requests"][0]["state"])
         self.assertFalse(exported["requests"][0]["content_available"])
 
+    def test_worker_observation_awaits_owner_acceptance(self):
+        self.app.add_member(self.mei, member="worker", role="worker")
+        observation = self.app.observe(self.worker, subject="mei", text="Mei enjoyed the garden walk.")
+        self.assertFalse(observation.confirmed)
+        self.assertEqual((observation,), self.app.pending_observations(self.mei))
+        self.assertEqual((), self.app.memories(self.worker, subject="mei", purpose="visit"))
+        self.assertEqual((), self.app.pending_observations(self.worker))
+        accepted = self.app.accept_observation(self.mei, observation.id)
+        self.assertEqual((MemoryKind.OBSERVATION, "worker", True), (accepted.kind, accepted.source, accepted.confirmed))
+        self.assertEqual((), self.app.pending_observations(self.mei))
+        record = next(m for m in self.app.export(self.mei)["memories"] if m["id"] == observation.id)
+        self.assertEqual(2, len(record["history"]))  # Pending, then accepted.
+        self.assertEqual((), self.app.memories(self.worker, subject="mei", purpose="visit"))
+
+    def test_owner_may_dismiss_worker_observation(self):
+        self.app.add_member(self.mei, member="worker", role="worker")
+        observation = self.app.observe(self.worker, subject="mei", text="Seemed tired in the afternoon.")
+        self.app.dismiss_observation(self.mei, observation.id)
+        self.assertEqual((), self.app.pending_observations(self.mei))
+        self.assertEqual([self.memory.id], [m["id"] for m in self.app.export(self.mei)["memories"]])
+        with self.assertRaises(AccessDenied):
+            self.app.accept_observation(self.mei, observation.id)
+
+    def test_contributor_may_withdraw_before_review_only(self):
+        self.app.add_member(self.mei, member="worker", role="worker")
+        observation = self.app.observe(self.worker, subject="mei", text="Watched television together.")
+        self.app.withdraw_observation(self.worker, observation.id)
+        self.assertEqual((), self.app.pending_observations(self.mei))
+        kept = self.app.observe(self.worker, subject="mei", text="Chatted about the garden.")
+        self.app.accept_observation(self.mei, kept.id)
+        with self.assertRaises(Conflict):
+            self.app.withdraw_observation(self.worker, kept.id)
+        other = self.app.observe(self.worker, subject="mei", text="Hummed a tune.")
+        with self.assertRaises(AccessDenied):
+            self.app.withdraw_observation(self.ali, other.id)
+
+    def test_observation_requires_active_membership(self):
+        with self.assertRaises(AccessDenied):
+            self.app.observe(self.worker, subject="mei", text="Not a member yet.")
+        self.app.add_member(self.mei, member="worker", role="worker")
+        self.assertTrue(self.app.observe(self.worker, subject="mei", text="Now a member.").id)
+        self.app.remove_member(self.mei, member="worker")
+        with self.assertRaises(AccessDenied):
+            self.app.observe(self.worker, subject="mei", text="Removed again.")
+        with self.assertRaises(ValueError):
+            self.app.observe(self.mei, subject="mei", text="Own account.")
+
+    def test_acceptance_applies_only_to_unreviewed_observations(self):
+        self.app.add_member(self.mei, member="worker", role="worker")
+        with self.assertRaises(Conflict):
+            self.app.accept_observation(self.mei, self.memory.id)
+        observation = self.app.observe(self.worker, subject="mei", text="Smiled during the walk.")
+        self.app.accept_observation(self.mei, observation.id)
+        with self.assertRaises(Conflict):
+            self.app.accept_observation(self.mei, observation.id)
+
+    def test_contributor_sees_only_own_submissions(self):
+        self.app.add_member(self.mei, member="worker", role="worker")
+        self.app.add_member(self.mei, member="ali", role="supporter")
+        first = self.app.observe(self.worker, subject="mei", text="Enjoyed the walk.")
+        second = self.app.observe(self.ali, subject="mei", text="Tired after lunch.")
+        self.assertEqual([first.id], [item["id"] for item in self.app.my_observations(self.worker)])
+        self.assertEqual(["pending"], [item["status"] for item in self.app.my_observations(self.worker)])
+        self.app.accept_observation(self.mei, second.id)
+        self.assertEqual(["accepted"], [item["status"] for item in self.app.my_observations(self.ali)])
+
+    def test_circle_subjects_list_active_memberships(self):
+        self.app.add_member(self.mei, member="worker", role="worker")
+        self.assertEqual(["mei"], self.app.circle_subjects(self.worker))
+        self.assertEqual([], self.app.circle_subjects(self.mei))
+        self.app.remove_member(self.mei, member="worker")
+        self.assertEqual([], self.app.circle_subjects(self.worker))
+
+    def test_followup_resolution_records_outcome_and_clears_flag(self):
+        request = self.request()
+        self.app.plan_followup(self.mei, request, due_at=self.now + timedelta(hours=1), alternative="Ask Lina instead.")
+        self.now += timedelta(hours=2)
+        self.assertTrue(self.app.requests(self.mei)[0]["needs_followup"])
+        self.app.resolve_followup(self.mei, request, note="I called Lina and we agreed on Sunday.")
+        view = self.app.requests(self.mei)[0]
+        self.assertFalse(view["needs_followup"])
+        self.assertEqual("I called Lina and we agreed on Sunday.", view["resolution"])
+        self.assertIsNotNone(view["resolved_at"])
+        with self.assertRaises(Conflict):
+            self.app.resolve_followup(self.mei, request, note="Second attempt.")
+        self.app.plan_followup(self.mei, request, due_at=self.now + timedelta(hours=1), alternative="Try again next week.")
+        replanned = self.app.requests(self.mei)[0]
+        self.assertIsNone(replanned["resolved_at"])
+        self.assertIsNone(replanned["resolution"])
+        self.assertFalse(replanned["needs_followup"])
+
+    def test_followup_resolution_is_owner_only_and_gated(self):
+        request = self.request()
+        with self.assertRaises(AccessDenied):
+            self.app.resolve_followup(self.worker, request, note="Worker note.")
+        with self.assertRaises(Conflict):
+            self.app.resolve_followup(self.mei, request, note="No plan exists yet.")
+        self.app.plan_followup(self.mei, request, due_at=self.now + timedelta(hours=1), alternative="Ask Lina.")
+        with self.assertRaises(ValueError):
+            self.app.resolve_followup(self.mei, request, note=" ")
+        self.app.transition(self.worker, request, state=RequestState.ACCEPTED)
+        with self.assertRaises(Conflict):
+            self.app.resolve_followup(self.mei, request, note="Too late.")
+
+    def test_forgetting_redacts_followup_resolution(self):
+        request = self.request()
+        self.app.plan_followup(self.mei, request, due_at=self.now + timedelta(hours=1), alternative="Ask Lina.")
+        self.now += timedelta(hours=2)
+        self.app.resolve_followup(self.mei, request, note="Discussed it with Lina at breakfast.")
+        self.app.forget(self.mei, self.memory.id)
+        exported = self.app.export(self.mei)
+        self.assertNotIn("Discussed it with Lina", json.dumps(exported))
+        self.assertEqual("", exported["requests"][0]["resolution"])
+
     def test_nested_failure_rolls_back_all_service_work(self):
         with self.assertRaises(RuntimeError):
             with self.store.transaction():
@@ -175,9 +289,31 @@ class MigrationTests(unittest.TestCase):
             db.close()
             for _ in range(2):
                 with SQLiteStore(path) as store:
-                    self.assertEqual(2, store.connection.execute("PRAGMA user_version").fetchone()[0])
+                    self.assertEqual(6, store.connection.execute("PRAGMA user_version").fetchone()[0])
                     token = SessionService(store).issue("mei")
                     self.assertEqual("Breakfast at 8", CareApplication(store).export(token)["memories"][0]["text"])
+
+    def test_v2_upgrade_adds_resolution_columns_and_keeps_followups(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "care.sqlite"
+            db = sqlite3.connect(path)
+            db.executescript(SCHEMA)
+            for statement in SESSION_SCHEMA.split(";"):
+                if statement.strip():
+                    db.execute(statement)
+            db.execute("PRAGMA user_version = 2")
+            db.execute("INSERT INTO requests VALUES ('r', 'mei', 'worker', 'visit', 'Please visit.', 'delivered', 'key', 'old', 'old')")
+            db.execute("INSERT INTO followups VALUES ('r', '2100-01-01T00:00:00+00:00', 'Ask Lina.', 'old')")
+            db.commit()
+            db.close()
+            for _ in range(2):
+                with SQLiteStore(path) as store:
+                    self.assertEqual(6, store.connection.execute("PRAGMA user_version").fetchone()[0])
+                    columns = {row[1] for row in store.connection.execute("PRAGMA table_info(followups)")}
+                    self.assertIn("resolved_at", columns)
+                    self.assertIn("resolution", columns)
+                    self.assertEqual("Ask Lina.", store.connection.execute(
+                        "SELECT alternative FROM followups WHERE request_id='r'").fetchone()["alternative"])
 
     def test_failed_migration_rolls_back_without_version_change(self):
         with tempfile.TemporaryDirectory() as directory:

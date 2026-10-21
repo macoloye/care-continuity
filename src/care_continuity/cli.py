@@ -58,9 +58,11 @@ def main() -> None:
         card = knowledge.submit(contributor="editor", title="Handover procedure",
                                 body="Check who accepted the request before marking help as arranged.",
                                 kind="procedure", source="Care Continuity procedure library",
-                                publication_authorized=True)
+                                publication_authorized=True, audience="Supporters", setting="Local demonstration",
+                                language="en", limitations="Software fixture, not reviewed care guidance",
+                                publication_rights="Original repository demonstration")
         knowledge.review(card, actor="reviewer", review_due=now + timedelta(days=30),
-                         privacy_checked=True, scope_checked=True)
+                         privacy_checked=True, scope_checked=True, evidence="Demonstration review only")
         print("Knowledge card:", knowledge.search("handover")[0].title)
         print("\nAll records were held in memory.")
 

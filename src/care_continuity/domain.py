@@ -92,3 +92,10 @@ class KnowledgeCard:
     reviewer: str | None
     review_due: str | None
     status: str
+    audience: str
+    setting: str
+    language: str
+    limitations: str
+    submitted_at: str | None
+    published_at: str | None
+    qualification_id: str | None

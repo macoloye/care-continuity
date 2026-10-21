@@ -18,6 +18,8 @@ The SQLite connection is an internal persistence interface, not a protected API.
 
 Use context links whenever request text derives from a memory. The library cannot detect someone manually copying private text into an unrelated message. Callers must not persist or expose returned records after authority changes without rechecking access.
 
+Circle members record observations with `observe`, which requires active membership and leaves the record unconfirmed and private to the person. `observations_pending` is the person's review inbox. `observation_accept` confirms the record while preserving the contributor as its source; `observation_dismiss` and `observation_withdraw` remove an unreviewed observation before it reaches any summary or export. `observations_by` shows a contributor only their own submissions and their review status.
+
 ## Consent
 
 ```python
@@ -51,7 +53,9 @@ The named recipient uses `transition` to accept a delivered request and then com
 
 ## Knowledge
 
-`submit` requires a separate `publication_authorized=True` attestation. Submission creates a draft. An independently configured reviewer calls `review` with privacy and scope attestations and a future review deadline. Self-review is denied. Experience stays labelled `experience`; review does not establish clinical evidence.
+`submit` requires audience, setting, language, limitations, a source citation, publication-rights evidence, and a separate `publication_authorized=True` attestation. Submission creates a private draft and records who authorized publication and when. An independently configured reviewer calls `review` with privacy and scope attestations, written evidence, and a future review deadline. Reviews are retained as separate records; renewal preserves the first publication date. Self-review is denied. Experience stays labelled `experience`; review does not establish clinical evidence.
+
+`submissions(actor=...)` and `evidence(card_id, actor=...)` expose drafts and editorial records only to their contributor or a configured reviewer. Public search never includes rights evidence or review notes. The contributor or a reviewer may withdraw a card; withdrawal is idempotent and terminal. A replacement needs a new submission and review. See the [knowledge pilot guide](knowledge.md) for an executable session-bound example and migration behavior.
 
 `search` retrieves current reviewed experience and procedure cards with a literal case-insensitive substring match. It returns source and review metadata, not a generated answer. Draft, withdrawn, and overdue cards are excluded on every call. Professional guidance publication is intentionally disabled pending qualified-review support.
 
@@ -61,4 +65,49 @@ The named recipient uses `transition` to accept a delivered request and then com
 - `Conflict`: stale memory revision, reused idempotency key, or invalid state transition.
 - `ValueError`: invalid input, such as an empty message or naive datetime.
 
-Use one `SQLiteStore` per thread and close it with a context manager. Service transactions can nest inside an application transaction using savepoints. Schema version 2 is initialized automatically; version 1 databases upgrade transactionally. Unknown versions are rejected.
+Use one `SQLiteStore` per thread and close it with a context manager. Service transactions can nest inside an application transaction using savepoints. Schema version 6 is initialized automatically; version 1–5 databases upgrade transactionally. Legacy knowledge records remain stored but require a new submission with metadata and rights evidence before appearing in search. Unknown versions are rejected.
+
+## Reviewer qualification records
+
+`QualificationService` in `care_continuity.qualifications` records externally checked
+qualifications. The host configures `verifiers`; no verifier is configured by default.
+`record` requires an independent verifier, reviewer identity, exact card kind, setting and
+language, private evidence, future expiry and an idempotency key. Retrying the same key and
+payload returns the original record, including after revocation. Changed payloads conflict.
+Records are immutable; replacement checks get a new key and record.
+
+`list_records` permits only the reviewer concerned or a configured verifier. `revoke` is
+verifier-only and idempotent. `require` checks exact scope and coverage of a review deadline.
+Evidence never enters audit events or public cards. Qualification records do not confer
+editorial reviewer authority or establish that an issuer actually verified a credential.
+
+`KnowledgeService.review` and `CareApplication.review_knowledge` accept an optional
+`qualification_id`. A linked record must cover the reviewer, kind, setting, language and
+whole review interval. Revocation or expiry excludes the dependent card from subsequent
+searches. Review history retains the original qualification ID. Renewal may replace it with
+a current matching record, but cannot drop the requirement. Existing unqualified experience
+and procedure reviews keep their behavior. Professional guidance stays disabled.
+
+## External delivery foundation
+
+The trusted `OutboxService` worker and session-bound `authorize_delivery_provider`,
+`enqueue_delivery`, and `deliveries` APIs implement explicit provider disclosure, durable
+jobs, bounded safe retries and ambiguous-outcome handling. Existing `dispatch` remains
+local-only and refuses requests already assigned to an outbox job. See the
+[delivery contract and example](delivery.md). No external transport is configured.
+
+`OutboxService.reconcile(job_id, provider=..., lookup=...)` resolves unknown delivery
+outcomes using a trusted receipt adapter outside database transactions. It sends only the
+job ID to the lookup. Definitive non-delivery may requeue within the existing attempt budget
+after fresh authorization; unknown results never resend. Original attempts are retained,
+and resolution is recorded in metadata-only events. This is a privileged host API, not an
+owner-supplied receipt flag. See the [receipt contract](delivery.md#limits-and-remaining-work).
+
+`deliveries(token)` also returns each job’s recipient and current `request_state` in the
+same owner-scoped read. The browser uses these metadata fields to distinguish transport
+receipt from human acceptance without copying request text.
+
+See [model suggestions](conversation.md) for the session-bound `ConversationService`,
+explicit provider authorization, adapter contract, ephemeral suggestions and explicit
+`save_draft` review. Saving rechecks authority and every source revision, preserves source
+dependencies for forgetting, and creates no sharing grants or delivery jobs.

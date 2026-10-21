@@ -22,6 +22,7 @@ class WebContracts(unittest.TestCase):
         self.web = WebApp(self.store)
         self.mei = self.web.sessions.issue("mei")
         self.lina = self.web.sessions.issue("lina")
+        self.worker = self.web.sessions.issue("worker")
 
     def post(self, path, token=None, **fields):
         token = token or self.mei
@@ -111,8 +112,54 @@ class WebContracts(unittest.TestCase):
         self.post("/sharing/revoke", id=grant["id"])
         self.assertNotIn("Company in the garden?", self.web.get("/inbox", self.lina).body)
 
+    def test_observation_submission_and_owner_review(self):
+        response = self.post("/observation/submit", self.worker, subject="mei", text="Mei enjoyed the garden.")
+        self.assertEqual("/observations", response.headers["Location"])
+        worker_page = self.web.get("/observations", self.worker).body
+        self.assertIn("Mei enjoyed the garden.", worker_page)
+        self.assertIn("Waiting for review", worker_page)
+        owner_page = self.web.get("/memories", self.mei).body
+        self.assertIn("Observations to review", owner_page)
+        self.assertIn("From Alex", owner_page)
+        observation = self.web.app.pending_observations(self.mei)[0]
+        self.post("/observation/accept", self.mei, id=observation.id)
+        owner_page = self.web.get("/memories", self.mei).body
+        self.assertNotIn("Observations to review", owner_page)
+        self.assertIn("observation · Source: Alex", owner_page)
+        worker_page = self.web.get("/observations", self.worker).body
+        self.assertIn("Added to the record", worker_page)
+
+    def test_owner_can_dismiss_an_observation(self):
+        self.post("/observation/submit", self.worker, subject="mei", text="Seemed tired.")
+        observation = self.web.app.pending_observations(self.mei)[0]
+        self.post("/observation/dismiss", self.mei, id=observation.id)
+        self.assertEqual((), self.web.app.pending_observations(self.mei))
+        self.assertNotIn("Seemed tired.", json.dumps(json.loads(self.web.get("/export", self.mei).body)))
+
+    def test_contributor_can_withdraw_a_pending_observation(self):
+        self.post("/observation/submit", self.worker, subject="mei", text="Mentioned an old friend.")
+        observation = self.web.app.pending_observations(self.mei)[0]
+        self.post("/observation/withdraw", self.worker, id=observation.id)
+        self.assertEqual((), self.web.app.pending_observations(self.mei))
+        self.assertNotIn("Mentioned an old friend.", self.web.get("/observations", self.worker).body)
+
+    def test_observation_submission_requires_membership(self):
+        with self.assertRaises(AccessDenied):
+            self.post("/observation/submit", self.worker, subject="lina", text="About Lina.")
+
+    def test_followup_outcome_can_be_recorded(self):
+        request, _ = self.draft()
+        self.approve(request)
+        self.post("/request/followup", id=request, hours=24, alternative="Ask about next week.")
+        self.post("/request/resolve", id=request, note="Called Lina on the phone.")
+        page = self.web.get("/requests", self.mei).body
+        self.assertIn("Called Lina on the phone.", page)
+        self.assertNotIn("No one has accepted yet", page)
+        with self.assertRaises(Conflict):
+            self.post("/request/resolve", id=request, note="Again.")
+
     def test_all_owner_pages_render_without_javascript(self):
-        for path in ("/", "/memories", "/circle", "/sharing", "/requests", "/history", "/inbox"):
+        for path in ("/", "/memories", "/circle", "/sharing", "/requests", "/history", "/inbox", "/observations"):
             with self.subTest(path=path):
                 response = self.web.get(path, self.mei)
                 self.assertEqual(200, response.status)

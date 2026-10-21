@@ -63,7 +63,7 @@ class SQLiteStore:
             # Serialize startup too: another process may be upgrading this file.
             with self.transaction() as db:
                 version = db.execute("PRAGMA user_version").fetchone()[0]
-                if version not in (0, 1, 2):
+                if version not in (0, 1, 2, 3, 4, 5, 6):
                     raise ValueError(f"Unsupported database schema: {version}")
                 if version == 0:
                     for statement in SCHEMA.split(";"):
@@ -74,6 +74,26 @@ class SQLiteStore:
                         if statement.strip():
                             db.execute(statement)
                     db.execute("PRAGMA user_version = 2")
+                if version < 3:
+                    for statement in FOLLOWUP_RESOLUTION_SCHEMA.split(";"):
+                        if statement.strip():
+                            db.execute(statement)
+                    db.execute("PRAGMA user_version = 3")
+                if version < 4:
+                    for statement in KNOWLEDGE_PILOT_SCHEMA.split(";"):
+                        if statement.strip():
+                            db.execute(statement)
+                    db.execute("PRAGMA user_version = 4")
+                if version < 5:
+                    for statement in QUALIFICATION_SCHEMA.split(";"):
+                        if statement.strip():
+                            db.execute(statement)
+                    db.execute("PRAGMA user_version = 5")
+                if version < 6:
+                    for statement in OUTBOX_SCHEMA.split(";"):
+                        if statement.strip():
+                            db.execute(statement)
+                    db.execute("PRAGMA user_version = 6")
         except BaseException:
             self.close()
             raise
@@ -127,5 +147,55 @@ CREATE TABLE care_circle (
 CREATE TABLE followups (
     request_id TEXT PRIMARY KEY REFERENCES requests(id),
     due_at TEXT NOT NULL, alternative TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+"""
+
+FOLLOWUP_RESOLUTION_SCHEMA = """
+ALTER TABLE followups ADD COLUMN resolved_at TEXT;
+ALTER TABLE followups ADD COLUMN resolution TEXT;
+"""
+
+
+KNOWLEDGE_PILOT_SCHEMA = """
+ALTER TABLE knowledge ADD COLUMN audience TEXT NOT NULL DEFAULT '';
+ALTER TABLE knowledge ADD COLUMN setting TEXT NOT NULL DEFAULT '';
+ALTER TABLE knowledge ADD COLUMN language TEXT NOT NULL DEFAULT '';
+ALTER TABLE knowledge ADD COLUMN limitations TEXT NOT NULL DEFAULT '';
+ALTER TABLE knowledge ADD COLUMN submitted_at TEXT;
+ALTER TABLE knowledge ADD COLUMN published_at TEXT;
+CREATE TABLE knowledge_publication_rights (
+    card_id TEXT PRIMARY KEY REFERENCES knowledge(id),
+    actor TEXT NOT NULL, evidence TEXT NOT NULL, authorized_at TEXT NOT NULL
+);
+CREATE TABLE knowledge_reviews (
+    id TEXT PRIMARY KEY, card_id TEXT NOT NULL REFERENCES knowledge(id),
+    reviewer TEXT NOT NULL, evidence TEXT NOT NULL, reviewed_at TEXT NOT NULL,
+    review_due TEXT NOT NULL
+);
+"""
+
+
+QUALIFICATION_SCHEMA = """
+CREATE TABLE reviewer_qualifications (
+    id TEXT PRIMARY KEY, reviewer TEXT NOT NULL, verifier TEXT NOT NULL,
+    kind TEXT NOT NULL, setting TEXT NOT NULL, language TEXT NOT NULL,
+    evidence TEXT NOT NULL, verified_at TEXT NOT NULL, expires_at TEXT NOT NULL,
+    revoked_at TEXT, idempotency_key TEXT NOT NULL, UNIQUE(verifier, idempotency_key)
+);
+ALTER TABLE knowledge ADD COLUMN qualification_id TEXT REFERENCES reviewer_qualifications(id);
+ALTER TABLE knowledge_reviews ADD COLUMN qualification_id TEXT REFERENCES reviewer_qualifications(id);
+"""
+
+
+OUTBOX_SCHEMA = """
+CREATE TABLE delivery_jobs (
+    id TEXT PRIMARY KEY, request_id TEXT NOT NULL UNIQUE REFERENCES requests(id),
+    provider TEXT NOT NULL, state TEXT NOT NULL, attempts INTEGER NOT NULL,
+    available_at TEXT NOT NULL, lease_token TEXT, lease_until TEXT
+);
+CREATE TABLE delivery_attempts (
+    job_id TEXT NOT NULL REFERENCES delivery_jobs(id), number INTEGER NOT NULL,
+    started_at TEXT NOT NULL, finished_at TEXT, outcome TEXT NOT NULL,
+    PRIMARY KEY(job_id, number)
 );
 """
