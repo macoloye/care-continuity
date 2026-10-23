@@ -6,7 +6,7 @@ These instructions apply to this repository and its subdirectories. Read the fil
 
 Care Continuity provides reusable memory, consent, knowledge, and delegation components for care assistants. The person receiving support controls their record and sharing decisions.
 
-Start with [README.md](README.md) for setup and current features. Use [elderly-project-plan.md](elderly-project-plan.md) for product intent and [docs/technical-plan.md](docs/technical-plan.md) for implementation status and next steps. Keep planned capabilities distinct from working code.
+Start with [README.md](README.md) for setup and current features. Use [elderly-project-plan.md](docs/elderly-project-plan.md) for product intent, [docs/architecture.md](docs/architecture.md) for architecture, and [docs/next-release-plan.md](docs/next-release-plan.md) as the only checklist for completed work and next steps. Keep planned capabilities distinct from working code. Keep all plans and progress records under `docs/`; use [docs/README.md](docs/README.md) as the planning index and update release status when implementation changes.
 
 The current browser application runs locally. Its profile chooser does not verify identity. Keep it bound to loopback; do not turn it into a public service as a side effect of another change.
 
@@ -26,6 +26,7 @@ Code lives in `src/care_continuity/`; tests live in `tests/`.
 | `qualifications.py` | Private external-check attestations, exact scope, expiry, and revocation |
 | `knowledge.py` | Separate submission, review, retrieval, and withdrawal |
 | `sessions.py`, `circle.py` | Bearer sessions and care-circle membership |
+| `directory.py` | People directory and relationship setup behind the local console |
 | `application.py` | Session-derived identity and operations composed across services |
 | `web.py`, `web_views.py`, `static/` | Local HTTP boundary, escaped HTML, and presentation |
 
@@ -82,6 +83,6 @@ If packaging or entry points change, build a wheel and verify installation and t
 
 Write plain, specific prose. Explain behavior, decisions, and practical limits once, linking to the detailed source instead of repeating it. Avoid promotional language, filler, generated-sounding summaries, and comments that merely restate names.
 
-Update the relevant API or workflow guide when behavior changes, and update the technical plan when milestone status changes. Preserve the original product proposal unless the task calls for revising it. Keep examples executable and self-contained where practical.
+Update the relevant API or workflow guide when behavior changes, and update the project checklist when task status changes. Preserve the original product proposal unless the task calls for revising it. Keep examples executable and self-contained where practical.
 
 In the final handoff, state what changed, why it matters, what was verified, and any material unfinished work. Follow [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md) for contribution and data-handling details.

@@ -63,7 +63,7 @@ class SQLiteStore:
             # Serialize startup too: another process may be upgrading this file.
             with self.transaction() as db:
                 version = db.execute("PRAGMA user_version").fetchone()[0]
-                if version not in (0, 1, 2, 3, 4, 5, 6):
+                if version not in (0, 1, 2, 3, 4, 5, 6, 7, 8):
                     raise ValueError(f"Unsupported database schema: {version}")
                 if version == 0:
                     for statement in SCHEMA.split(";"):
@@ -94,6 +94,18 @@ class SQLiteStore:
                         if statement.strip():
                             db.execute(statement)
                     db.execute("PRAGMA user_version = 6")
+                if version < 7:
+                    for statement in DIRECTORY_SCHEMA.split(";"):
+                        if statement.strip():
+                            db.execute(statement)
+                    db.execute("PRAGMA user_version = 7")
+                if version < 8:
+                    for statement in SETUP_SCHEMA.split(";"):
+                        if statement.strip():
+                            db.execute(statement)
+                    db.execute("INSERT INTO app_setup VALUES ('demo-v1', ?)",
+                               ('eligible' if version == 0 else 'preserved',))
+                    db.execute("PRAGMA user_version = 8")
         except BaseException:
             self.close()
             raise
@@ -198,4 +210,15 @@ CREATE TABLE delivery_attempts (
     started_at TEXT NOT NULL, finished_at TEXT, outcome TEXT NOT NULL,
     PRIMARY KEY(job_id, number)
 );
+"""
+
+DIRECTORY_SCHEMA = """
+CREATE TABLE people (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, created_at TEXT NOT NULL
+);
+"""
+
+
+SETUP_SCHEMA = """
+CREATE TABLE app_setup (key TEXT PRIMARY KEY, state TEXT NOT NULL);
 """

@@ -256,7 +256,7 @@ class OutboxMigrationTests(unittest.TestCase):
             self.legacy(path).close()
             for _ in range(2):
                 with SQLiteStore(path) as store:
-                    self.assertEqual(6, store.connection.execute('PRAGMA user_version').fetchone()[0])
+                    self.assertEqual(8, store.connection.execute('PRAGMA user_version').fetchone()[0])
                     self.assertEqual('Example', store.connection.execute('SELECT message FROM requests').fetchone()[0])
                     self.assertEqual(0, store.connection.execute('SELECT count(*) FROM delivery_jobs').fetchone()[0])
 

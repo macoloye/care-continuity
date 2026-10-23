@@ -8,7 +8,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from care_continuity import AccessDenied, CareApplication, Conflict, MemoryKind, Operation, RequestState, SessionService, SQLiteStore
-from care_continuity.store import SCHEMA, SESSION_SCHEMA
+from care_continuity.store import (SCHEMA, SESSION_SCHEMA, FOLLOWUP_RESOLUTION_SCHEMA,
+                                   KNOWLEDGE_PILOT_SCHEMA, QUALIFICATION_SCHEMA, OUTBOX_SCHEMA)
 
 
 class ApplicationTests(unittest.TestCase):
@@ -289,7 +290,7 @@ class MigrationTests(unittest.TestCase):
             db.close()
             for _ in range(2):
                 with SQLiteStore(path) as store:
-                    self.assertEqual(6, store.connection.execute("PRAGMA user_version").fetchone()[0])
+                    self.assertEqual(8, store.connection.execute("PRAGMA user_version").fetchone()[0])
                     token = SessionService(store).issue("mei")
                     self.assertEqual("Breakfast at 8", CareApplication(store).export(token)["memories"][0]["text"])
 
@@ -308,12 +309,49 @@ class MigrationTests(unittest.TestCase):
             db.close()
             for _ in range(2):
                 with SQLiteStore(path) as store:
-                    self.assertEqual(6, store.connection.execute("PRAGMA user_version").fetchone()[0])
+                    self.assertEqual(8, store.connection.execute("PRAGMA user_version").fetchone()[0])
                     columns = {row[1] for row in store.connection.execute("PRAGMA table_info(followups)")}
                     self.assertIn("resolved_at", columns)
                     self.assertIn("resolution", columns)
                     self.assertEqual("Ask Lina.", store.connection.execute(
                         "SELECT alternative FROM followups WHERE request_id='r'").fetchone()["alternative"])
+
+    def test_v6_upgrade_adds_people_directory_and_preserves_records(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "care.sqlite"
+            db = sqlite3.connect(path)
+            db.executescript(SCHEMA + SESSION_SCHEMA + FOLLOWUP_RESOLUTION_SCHEMA
+                             + KNOWLEDGE_PILOT_SCHEMA + QUALIFICATION_SCHEMA + OUTBOX_SCHEMA)
+            db.execute("PRAGMA user_version = 6")
+            db.execute("INSERT INTO memories VALUES ('m', 'mei', 'preference', 'Breakfast at 8', 'mei', 1, 1, 'old', 'old', 0)")
+            db.commit()
+            db.close()
+            for _ in range(2):
+                with SQLiteStore(path) as store:
+                    self.assertEqual(8, store.connection.execute("PRAGMA user_version").fetchone()[0])
+                    self.assertEqual(0, store.connection.execute("SELECT count(*) FROM people").fetchone()[0])
+                    token = SessionService(store).issue("mei")
+                    self.assertEqual("Breakfast at 8", CareApplication(store).export(token)["memories"][0]["text"])
+
+    def test_failed_v6_upgrade_rolls_back_without_version_change(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "care.sqlite"
+            db = sqlite3.connect(path)
+            db.executescript(SCHEMA + SESSION_SCHEMA + FOLLOWUP_RESOLUTION_SCHEMA
+                             + KNOWLEDGE_PILOT_SCHEMA + QUALIFICATION_SCHEMA + OUTBOX_SCHEMA)
+            db.execute("PRAGMA user_version = 6")
+            db.execute("INSERT INTO memories VALUES ('m', 'mei', 'preference', 'Breakfast at 8', 'mei', 1, 1, 'old', 'old', 0)")
+            db.execute("CREATE TABLE people (incompatible TEXT)")
+            db.commit()
+            db.close()
+            with self.assertRaises(sqlite3.OperationalError):
+                SQLiteStore(path)
+            db = sqlite3.connect(path)
+            try:
+                self.assertEqual(6, db.execute("PRAGMA user_version").fetchone()[0])
+                self.assertEqual("Breakfast at 8", db.execute("SELECT text FROM memories").fetchone()[0])
+            finally:
+                db.close()
 
     def test_failed_migration_rolls_back_without_version_change(self):
         with tempfile.TemporaryDirectory() as directory:

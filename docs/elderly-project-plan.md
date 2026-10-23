@@ -1,6 +1,6 @@
 # Care Continuity: a project plan
 
-Working repository name: `care-continuity` (name availability not checked). Drafted 19 October 2026, based on [the elderly-care research](elderly.md). This is a proposed open-source project, with an initial focus on older adults receiving support at home.
+Working repository name: `care-continuity` (name availability not checked). Drafted 19 October 2026, based on [the elderly-care research](../../research/elderly.md). This is a proposed open-source project, with an initial focus on older adults receiving support at home.
 
 **Care Continuity helps developers build assistants that remember what matters to a person, respect who may know or do what, and follow through on agreed support over time.** Older adults, family caregivers, and care workers can talk to these assistants through text or voice. The project supplies reusable memory and delegation components, a care knowledge base combining professional guidance and caregiver experience, a small example application, a developer guide to older adults' needs, and scenarios for checking whether the whole experience works.
 

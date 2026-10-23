@@ -136,7 +136,7 @@ class QualificationMigrationTests(unittest.TestCase):
                     language='en', evidence='Example evidence', expires_at=datetime(2100,1,1,tzinfo=timezone.utc),
                     idempotency_key='key')
             with SQLiteStore(path) as store:
-                self.assertEqual(6, store.connection.execute('PRAGMA user_version').fetchone()[0])
+                self.assertEqual(8, store.connection.execute('PRAGMA user_version').fetchone()[0])
                 self.assertEqual('Preserved body', store.connection.execute('SELECT body FROM knowledge').fetchone()[0])
                 self.assertEqual('Preserved review', store.connection.execute('SELECT evidence FROM knowledge_reviews').fetchone()[0])
                 self.assertEqual(qid, store.connection.execute('SELECT id FROM reviewer_qualifications').fetchone()[0])

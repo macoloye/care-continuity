@@ -8,6 +8,12 @@ The low-level services assume their caller has authenticated `actor`. A user-con
 
 The SQLite connection is an internal persistence interface, not a protected API. Anyone with database or process access can bypass service checks. Knowledge reviewer IDs are configured by the host application. Publication and review flags are explicit caller attestations, not automated verification of rights, privacy, or qualifications.
 
+## Directory
+
+`DirectoryService` backs the local setup console and profile chooser. `create_person` adds a person to the directory (a person receiving support or a carer); reviewer authority stays host-configured and cannot be created through setup. `set_relationship` and `end_relationship` delegate to the privileged `CircleService` membership paths, which have exactly the effects of the person's own actions — including full grant revocation and cancellation of unfinished requests on removal — with the setup `operator` recorded in audit events instead of the person. `ensure_person` seeds demo profiles idempotently at startup.
+
+The service deliberately offers no method that reads care data or creates grants: membership remains a contribution boundary, and only the person's own sharing decisions disclose anything. It is a trusted adapter surface, like session issuance, not a role that bypasses consent.
+
 ## Memory
 
 `remember` requires the person's authorization and preserves the supplied source and kind. Preferences must be attributed to the person. `confirmed=False` means the record has not been confirmed; it does not infer consent to store or share it. Storage authorization comes from the owner call, while sharing requires grants.
@@ -111,3 +117,9 @@ See [model suggestions](conversation.md) for the session-bound `ConversationServ
 explicit provider authorization, adapter contract, ephemeral suggestions and explicit
 `save_draft` review. Saving rechecks authority and every source revision, preserves source
 dependencies for forgetting, and creates no sharing grants or delivery jobs.
+
+`CareApplication(..., delivery_providers=frozenset({...}))` enables the atomic
+`approve_external_request(token, request_id, provider=..., expires_at=...)` operation
+for host-configured providers. It grants both recipients their exact scopes and queues
+a pending job in one transaction after a complete disclosure preview. Repeated approval
+conflicts. See [external approval](delivery.md#atomic-external-approval).

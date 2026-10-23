@@ -24,8 +24,10 @@ from .store import SQLiteStore
 class CareApplication:
     def __init__(self, store: SQLiteStore, clock: Clock = utc_now, *,
                  reviewers: frozenset[str] = frozenset(),
-                 qualification_verifiers: frozenset[str] = frozenset()) -> None:
+                 qualification_verifiers: frozenset[str] = frozenset(),
+                 delivery_providers: frozenset[str] = frozenset()) -> None:
         self.store, self.clock = store, clock
+        self._delivery_providers = frozenset(delivery_providers)
         self._sessions = SessionService(store, clock)
         self._consent = ConsentService(store, clock)
         self._memory = MemoryService(store, self._consent, clock)
@@ -313,6 +315,34 @@ class CareApplication:
     def enqueue_delivery(self, token: str, request_id: str, *, provider: str) -> str:
         """Queue external delivery after explicit recipient and provider grants."""
         with self._actor(token) as actor:
+            return OutboxService(self.store, self.clock).enqueue(request_id, actor=actor, provider=provider)
+
+    def approve_external_request(self, token: str, request_id: str, *, provider: str,
+                                 expires_at: datetime) -> str:
+        """Approve the exact preview and queue external delivery atomically.
+
+        The host configures provider identities. Before calling, show the person
+        the message, all pinned context, supporter, purpose, provider and expiry.
+        This creates a pending job; only a separate worker may contact a provider.
+        Like local approval, repeated approval conflicts rather than renewing grants.
+        """
+        with self._actor(token) as actor:
+            if provider not in self._delivery_providers:
+                raise AccessDenied('Choose a configured delivery provider')
+            request = self._requests.read(request_id, actor=actor)
+            self._consent.require_owner(actor, request.subject)
+            if request.state != RequestState.DRAFT:
+                raise Conflict('This draft has already been handled; check its current status')
+            self._circle.require_member(actor, request.recipient)
+            self.authorize_delivery_provider(token, request_id, provider=provider, expires_at=expires_at)
+            scopes = [('request', request_id, Operation.READ), ('request', request_id, Operation.ACT)]
+            for memory in request.context:
+                scopes.extend((('memory', memory.id, Operation.READ), ('memory', memory.id, Operation.SHARE)))
+            for resource_type, resource_id, operation in scopes:
+                self._consent.grant(actor=actor, subject=actor, recipient=request.recipient,
+                                    purpose=request.purpose, resource_type=resource_type,
+                                    resource_id=resource_id, operation=operation, expires_at=expires_at)
+            self._requests.queue(request_id, actor=actor)
             return OutboxService(self.store, self.clock).enqueue(request_id, actor=actor, provider=provider)
 
     def deliveries(self, token: str) -> list[dict]:

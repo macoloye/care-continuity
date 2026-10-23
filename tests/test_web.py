@@ -10,7 +10,7 @@ from http.server import HTTPServer
 from queue import Queue
 from urllib.parse import parse_qs, urlencode, urlsplit
 
-from care_continuity import AccessDenied, Conflict, SQLiteStore
+from care_continuity import AccessDenied, Conflict, ConsentService, MemoryService, SQLiteStore
 from care_continuity.domain import timestamp
 from care_continuity.web import WebApp, handler_for
 
@@ -25,7 +25,7 @@ class WebContracts(unittest.TestCase):
         self.worker = self.web.sessions.issue("worker")
 
     def post(self, path, token=None, **fields):
-        token = token or self.mei
+        token = self.mei if token is None else token
         data = {key: value if isinstance(value, list) else [str(value)] for key, value in fields.items()}
         data["csrf"] = [self.web.csrf(token)]
         return self.web.post(path, data, token)
@@ -37,8 +37,9 @@ class WebContracts(unittest.TestCase):
         return parse_qs(urlsplit(response.headers["Location"]).query)["id"][0], memory
 
     def approve(self, request):
-        return self.post("/request/approve", id=request,
-                         expires=timestamp(self.web.app.clock() + timedelta(days=1)))
+        expiry = timestamp(self.web.app.clock() + timedelta(days=1))
+        return self.post("/request/approve", id=request, expires=expiry, provider="local",
+                         signature=self.web.approval_signature(self.mei, request, expiry, "local"))
 
     def test_preview_precedes_delivery_and_full_loop_works(self):
         request, _ = self.draft()
@@ -71,8 +72,9 @@ class WebContracts(unittest.TestCase):
     def test_other_actor_cannot_approve_or_override_identity(self):
         request, _ = self.draft()
         with self.assertRaises(AccessDenied):
-            self.post("/request/approve", self.lina, id=request,
-                      expires=timestamp(self.web.app.clock() + timedelta(days=1)))
+            expiry = timestamp(self.web.app.clock() + timedelta(days=1))
+            self.post("/request/approve", self.lina, id=request, expires=expiry, provider="local",
+                      signature=self.web.approval_signature(self.lina, request, expiry, "local"))
         with self.assertRaises(ValueError):
             self.post("/memory/save", self.lina, actor="mei", text="Forged")
 
@@ -158,6 +160,72 @@ class WebContracts(unittest.TestCase):
         with self.assertRaises(Conflict):
             self.post("/request/resolve", id=request, note="Again.")
 
+    def test_admin_page_renders_without_a_profile(self):
+        response = self.web.get("/admin", "")
+        self.assertEqual(200, response.status)
+        for expected in ("Local setup", "Add a person", "Care-circle relationships",
+                         "Mei", "Alex (visiting worker)", "supports Mei"):
+            self.assertIn(expected, response.body)
+
+    def test_admin_adds_a_person_who_can_then_be_chosen(self):
+        self.post("/admin/person", "", id="priya", name="Priya", kind="person")
+        chooser = self.web.get("/", "").body
+        self.assertIn("Priya", chooser)
+        response = self.post("/login", "", profile="priya")
+        token = response.headers["Set-Cookie"].split(";", 1)[0].split("=", 1)[1]
+        self.assertEqual("priya", self.web.sessions.resolve(token))
+        self.assertIn("Priya", self.web.get("/", token).body)
+        # A new profile starts with no records and no access to anyone else's.
+        self.assertEqual([], self.web.app.export(token)["memories"])
+        memory = self.web.app.export(self.mei)["memories"][0]
+        with self.assertRaises(AccessDenied):
+            MemoryService(self.web.store, ConsentService(self.web.store)).read(
+                memory["id"], actor="priya", purpose="support visit")
+
+    def test_admin_person_validation_and_csrf(self):
+        with self.assertRaises(Conflict):
+            self.post("/admin/person", "", id="mei", name="Mei Again", kind="person")
+        for fields in ({"id": "Bad Id", "name": "X", "kind": "person"},
+                       {"id": "rev2", "name": "Rev", "kind": "reviewer"}):
+            with self.assertRaises(ValueError):
+                self.post("/admin/person", "", **fields)
+        with self.assertRaises(AccessDenied):
+            self.web.post("/admin/person", {"csrf": [self.web.csrf("other")], "id": ["x"],
+                                             "name": ["X"], "kind": ["person"]}, "")
+
+    def test_admin_relationships_change_membership_without_granting_access(self):
+        self.post("/admin/person", "", id="priya", name="Priya", kind="carer")
+        self.post("/admin/relationship", "", subject="mei", member="priya", role="worker")
+        circle_page = self.web.get("/circle", self.mei).body
+        self.assertIn("Priya", circle_page)
+        self.assertIn("worker", circle_page)
+        priya = self.web.sessions.issue("priya")
+        self.assertEqual((), self.web.app.memories(priya, subject="mei", purpose="support visit"))
+        memory = self.web.app.export(self.mei)["memories"][0]
+        with self.assertRaises(AccessDenied):
+            MemoryService(self.web.store, ConsentService(self.web.store)).read(
+                memory["id"], actor="priya", purpose="support visit")
+        # Membership is the contribution boundary, exactly as with self-added members.
+        self.post("/observation/submit", priya, subject="mei", text="Mei waved hello.")
+        self.assertIn("Mei waved hello.", self.web.get("/memories", self.mei).body)
+        self.post("/admin/relationship", "", subject="mei", member="priya", role="coordinator")
+        self.assertIn("coordinator", self.web.get("/circle", self.mei).body)
+        self.assertIn("Priya supports Mei as coordinator", self.web.get("/admin", "").body)
+        with self.assertRaises(ValueError):
+            self.post("/admin/relationship", "", subject="mei", member="mei", role="worker")
+        with self.assertRaises(AccessDenied):
+            self.post("/admin/relationship", "", subject="mei", member="stranger", role="worker")
+
+    def test_admin_ends_relationship_and_revokes_sharing(self):
+        request, _ = self.draft()
+        self.approve(request)
+        self.post("/admin/relationship/end", "", subject="mei", member="lina")
+        self.assertFalse(any(grant["active"] for grant in self.web.app.sharing(self.mei)))
+        self.assertEqual("cancelled", self.web.app.requests(self.mei)[0]["state"])
+        self.assertNotIn("Company in the garden?", self.web.get("/inbox", self.lina).body)
+        with self.assertRaises(AccessDenied):
+            self.post("/admin/relationship/end", "", subject="mei", member="lina")
+
     def test_all_owner_pages_render_without_javascript(self):
         for path in ("/", "/memories", "/circle", "/sharing", "/requests", "/history", "/inbox", "/observations"):
             with self.subTest(path=path):
@@ -237,6 +305,21 @@ class HTTPBoundaryTests(unittest.TestCase):
             self.assertEqual(303, status)
             self.assertIn("HttpOnly", response_headers["Set-Cookie"])
             self.assertEqual(403, self.request("POST", "/login", {"csrf": "forged", "profile": "mei"}, headers)[0])
+
+    def test_admin_setup_over_http_and_cross_origin_rejection(self):
+        status, _, html = self.request(path="/admin")
+        self.assertEqual(200, status)
+        self.assertIn("Add a person", html)
+        csrf = re.search(r'name="csrf" value="([^"]+)"', html)[1]
+        data = {"csrf": csrf, "id": "jo", "name": "Jo", "kind": "carer"}
+        status, _, _ = self.request("POST", "/admin/person", data, {"Origin": "http://" + self.authority})
+        self.assertEqual(303, status)
+        self.assertIn("Jo", self.request(path="/")[2])
+        self.assertEqual(403, self.request("POST", "/admin/person",
+                                           dict(data, id="eve"), {"Origin": "https://attacker.invalid"})[0])
+        self.assertEqual(403, self.request("POST", "/admin/person",
+                                           dict(data, id="eve", csrf="forged"),
+                                           {"Origin": "http://" + self.authority})[0])
 
     def test_malformed_form_and_post_only_mutations(self):
         status, _, _ = self.request("POST", "/login", {"csrf": "", "profile": "mei"}, {"Origin": "http://" + self.authority})

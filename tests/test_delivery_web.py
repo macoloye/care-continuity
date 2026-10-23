@@ -72,7 +72,7 @@ class DeliveryWebTests(unittest.TestCase):
                              ('received', 'Provider received it'), ('unknown', 'Delivery uncertain'),
                              ('blocked', 'Delivery stopped'), ('failed', 'Delivery attempts exhausted')]:
             with self.subTest(state=state):
-                self.assertIn(phrase, web_views.deliveries([item | {'state': state}]))
+                self.assertIn(phrase, web_views.deliveries([item | {'state': state}], self.web.directory.names()))
         body = self.web.get('/deliveries', self.owner).body
         self.assertIn('aria-current="page">Deliveries', body)
         self.assertIn('<main id="main"', body)

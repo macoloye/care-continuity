@@ -30,20 +30,20 @@ The product plan extends beyond this core. Keep these requirements open until th
 - **Misheard refusal:** transcription changes "don't send" to "send". A consequential action needs a clear confirmation; uncertain speech cannot authorize it.
 - **Let me finish:** long pauses and corrections do not interrupt or discard the person's request.
 - **One decision at a time:** a person can inspect memory and sharing choices with a keyboard or screen reader, without completing a long form.
-- **No reply:** after an agreed deadline, the person sees that nobody accepted and can choose an alternative. The current suite verifies only that delivery is not called acceptance.
+- **No reply:** after an agreed deadline, the person sees that nobody accepted and can choose an alternative. Deadline display and recording a follow-up outcome are implemented; a complete multi-day browser walkthrough and care-partner resolution remain open.
 - **Cited answer:** generated advice reflects the retrieved card, preserves its evidence label, and does not override individual wishes.
-- **Model-provider consent:** private data is withheld from a provider that has not been authorized for that use.
+- **Live model-provider consent:** synthetic adapter tests already withhold unauthorized context and recheck permissions after generation. Repeat these scenarios against the selected live adapter before pilot use.
 - **Derived-copy invalidation:** a future search index, generated brief, or notification loses access when any dependency is revoked or deleted.
 - **Representative dispute:** authority is verified through a human process. A family claim or diagnosis alone does not transfer control.
 - **Quiet week:** absent conversations do not create a mood label or trigger unwanted contact.
 
 These are acceptance requirements, not passing tests or implemented features. The application layer persists follow-up deadlines, alternatives, and recorded outcomes, and the local interface presents them. Resolving an overdue request through a care-partner workflow remains open.
 
-The local text interface now displays due follow-up plans, explicit sharing previews, and observation review. User evaluation, speech scenarios, and full accessibility checks remain open. [test_web.py](../tests/test_web.py) contains 20 controller and HTTP tests for the browser adapter, including cross-origin rejection, CSRF, stale drafts, escaped content, observation forms, and inbox revocation.
+The local text interface now displays due follow-up plans, explicit sharing previews, and observation review. User evaluation, speech scenarios, and full accessibility checks remain open. [test_web.py](../tests/test_web.py) contains controller and HTTP tests for the browser adapter, including cross-origin rejection, CSRF, stale drafts, escaped content, observation forms, and inbox revocation.
 
 ## Application contracts
 
-[test_application.py](../tests/test_application.py) adds 27 tests around the core services:
+[test_application.py](../tests/test_application.py) adds tests around the core services:
 
 - Session digests, invalid tokens, expiry, logout, and prevention of actor overrides.
 - Membership without implied access, required membership for application grants, and removal across overlapping grants and unfinished tasks.
@@ -52,3 +52,5 @@ The local text interface now displays due follow-up plans, explicit sharing prev
 - Owner-only follow-up planning, deadline boundaries, recorded outcomes, and no automatic contact.
 - Account export that excludes session secrets and forgotten text, including linked follow-up alternatives.
 - Nested transaction rollback and atomic database upgrades from version 1.
+
+The [next release scenario pack](next-release-plan.md#d5--release-scenario-pack) adds a complete local browser demonstration, persistence checks, and simulated model/delivery failure paths. Startup and demonstration workflow test sources now exist, but the full release checks remain pending; see the release plan for current implementation status and missing evidence.

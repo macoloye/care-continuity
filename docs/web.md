@@ -21,6 +21,14 @@ The server binds only to loopback. Stopping it clears records and sessions held 
 
 You can also record a follow-up plan and, once you have handled an unanswered request yourself, record the outcome from **My requests**. As a circle member, **Observations** lets you record what you noticed; the person then accepts or dismisses it from **My memories**. You can inspect activity history or download a JSON account export. A due follow-up is displayed when you load the request list. There is no background scheduler or notification delivery.
 
+## Local setup
+
+The chooser page links to **Local setup**, which lists the people on this device and their care-circle relationships. It can add a person (someone receiving support, or a carer) and record, change the role of, or end a relationship. A new profile appears in the chooser immediately, starts with no records, and can see nothing until the person shares with them.
+
+Setup is a privileged local surface, like the profile chooser: it does not verify identity, so it must stay bound to loopback and must not be exposed through a tunnel or public hosting. It is not an administrator role in the domain. A relationship only lets the member record observations for the person to review — it never grants access to memories or requests. Ending a relationship revokes all sharing and cancels unfinished requests, exactly as if the person had removed the member themselves. Setup actions are recorded in the person's activity history attributed to *local setup*.
+
+Two deliberate limits: reviewer authority is configured by the host and cannot be created here, and people cannot be deleted once added, because record deletion needs its own dependency design.
+
 ## Implementation
 
 | File | Responsibility |
@@ -28,6 +36,7 @@ You can also record a follow-up plan and, once you have handled an unanswered re
 | `web.py` | Loopback HTTP boundary, profile bootstrap, session cookies, form routing, errors |
 | `web_views.py` | HTML rendering and escaping |
 | `static/style.css` | Responsive layout, readable controls, keyboard focus styling |
+| `directory.py` | People directory and relationship setup behind the local console |
 | `application.py` | Session-derived identity, permissions, atomic request approval, account views |
 
 `approve_request` first validates ownership, draft state, current context revisions, and active circle membership. It creates the required grants, queues the request, and delivers locally inside one transaction. Changed context fails before grants are created. Repeated approval returns a conflict rather than duplicating permissions.
@@ -42,7 +51,7 @@ Pages use headings, landmarks, labelled fields, native buttons and disclosure co
 
 Manual verification covered the draft-to-completion flow in the in-app browser, the narrow layout, and keyboard activation of the skip link. These checks do not establish accessibility conformance. Full keyboard traversal, screen-reader testing, zoom and mobile testing, and sessions with older adults remain required.
 
-The first interface intentionally limits requests to a support visit with a seven-day permission window. Verified login, voice, and external delivery are not yet exposed. Knowledge contribution and review are available through **Knowledge**, using the [knowledge pilot walkthrough](knowledge.md#browser-workflow). The additional **Sam (demo reviewer)** profile has host-configured editorial authority for local examples only.
+Requests use the support-visit purpose, with one-hour, one-day or seven-day permission windows shown in the approval preview. Local simulated suggestion review and simulated external delivery approval are available. Verified login, voice and live external delivery remain unavailable. Knowledge contribution and review are available through **Knowledge**, using the [knowledge pilot walkthrough](knowledge.md#browser-workflow). The additional **Sam (demo reviewer)** profile has host-configured editorial authority for local examples only.
 
 The knowledge workflow was checked in the in-app browser with synthetic content: contribution,
 keyboard submission, profile switching, independent review, and library retrieval. The narrow
@@ -56,7 +65,7 @@ revocation and CSRF rejection. Screen-reader evaluation remains pending.
 It distinguishes provider receipt from the request being accepted, explains uncertain
 outcomes, and links to the matching request and sharing controls. Refresh does not retry
 or reconcile delivery. The empty state explains that local mailbox requests stay in
-**My requests**. Browser approval still delivers only to the local mailbox.
+**My requests**. Browser approval offers the local mailbox or the configured local delivery simulator; simulator jobs require the host-only runner in `demo.py`. The complete simulator walkthrough and its release verification remain tracked in the [release plan](next-release-plan.md).
 
 A synthetic uncertain delivery was checked in the in-app browser, including narrow layout,
 keyboard activation of Deliveries, the skip link and refresh focus, and navigation to the

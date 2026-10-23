@@ -24,20 +24,16 @@ from care_continuity import CareApplication, Operation, SessionService, SQLiteSt
 from care_continuity.outbox import DeliveryResult, OutboxService
 
 with SQLiteStore() as store:
-    app = CareApplication(store)
+    app = CareApplication(store, delivery_providers=frozenset({'example-transport'}))
     sessions = SessionService(store)
     owner = sessions.issue("example-owner")  # Trusted host / synthetic identity only.
     app.add_member(owner, member="example-supporter", role="supporter")
     request = app.create_request(owner, recipient="example-supporter", purpose="visit",
                                  message="Synthetic visit request", idempotency_key="visit-1")
     expiry = datetime.now(timezone.utc) + timedelta(hours=1)
-    # A real interface must show the exact disclosure before these approvals.
-    for operation in (Operation.READ, Operation.ACT):
-        app.grant(owner, recipient="example-supporter", purpose="visit", resource_type="request",
-                  resource_id=request, operation=operation, expires_at=expiry)
-    app.authorize_delivery_provider(owner, request, provider="example-transport", expires_at=expiry)
-    app.queue(owner, request)
-    job = app.enqueue_delivery(owner, request, provider="example-transport")
+    # A real interface must show the exact disclosure before this approval.
+    job = app.approve_external_request(owner, request, provider='example-transport',
+                                      expires_at=expiry)
 
     def example_transport(idempotency_key, payload):
         assert idempotency_key == job
@@ -122,3 +118,24 @@ contains no copied care text, lease tokens, or provider errors. Refreshing only 
 it never sends or reconciles a job. Uncertain outcomes explain why creating a duplicate
 request is unsafe. Each job links to its request for existing cancellation and follow-up
 controls, and to Sharing for revocation. Local inbox requests do not create delivery jobs.
+
+## Atomic external approval
+
+Configure allowed provider identities in the trusted host with
+`CareApplication(..., delivery_providers=frozenset({...}))`. The default is empty.
+`approve_external_request(token, request_id, provider=..., expires_at=...)` requires an
+owner session and an unchanged draft for an active circle member. Before calling it,
+show the exact message, every pinned memory, supporter, purpose, provider and expiry.
+
+The method creates supporter read/action and context read/share grants, separate provider
+read/share grants, queues the request and creates its pending delivery job in one
+transaction. Any failure rolls back grants, state changes, events and job creation.
+The method returns the job ID; it makes no network call and does not mark delivery or
+acceptance. Only the separate worker contacts the provider.
+
+Approval of an already handled draft conflicts, matching local approval. A caller that
+loses the response must inspect requests and deliveries rather than silently approve
+again or create a replacement request. Retrying never extends consent or duplicates a
+job. Existing lower-level grant, queue and enqueue methods remain available to trusted
+host integrations; their caller is responsible for provider configuration and composition.
+This addition does not configure a live transport or expose browser delivery approval.

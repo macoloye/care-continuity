@@ -137,7 +137,7 @@ class KnowledgeMigrationTests(unittest.TestCase):
             self.legacy(path).close()
             for _ in range(2):
                 with SQLiteStore(path) as store:
-                    self.assertEqual(6, store.connection.execute("PRAGMA user_version").fetchone()[0])
+                    self.assertEqual(8, store.connection.execute("PRAGMA user_version").fetchone()[0])
                     service = KnowledgeService(store, reviewers=frozenset({"reviewer"}))
                     self.assertEqual("Old body", service.submissions(actor="writer")[0].body)
                     self.assertEqual((), service.search())

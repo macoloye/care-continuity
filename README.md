@@ -4,7 +4,7 @@ Reusable memory, consent, and follow-through components for care assistants.
 
 The person receiving support controls what is remembered and shared. A request stays visibly unfinished until the chosen supporter accepts and completes it. Permission checks run in ordinary application code, independently of any language model.
 
-This repository is an early implementation of the [project proposal](elderly-project-plan.md). It contains a Python library, command-line walkthroughs, a browser application, and executable scenarios.
+This repository is an early implementation of the [project proposal](docs/elderly-project-plan.md). It contains a Python library, command-line walkthroughs, a browser application, and executable scenarios.
 
 ## Run the command-line tour
 
@@ -48,9 +48,9 @@ Choose a profile to edit memories, review sharing, approve a request, accept it 
 | Model suggestions | Replaceable host-configured adapter boundary, explicit provider consent, selected revisions, structured suggestions and explicit reviewed-draft saving; no live model configured. |
 | Persistence | SQLite records and transactions, with metadata-only audit events. |
 | Application | Revocable bearer sessions, care-circle management, filtered inboxes, owner request views, follow-up deadlines and recorded outcomes, observation review, and account export. |
-| Browser app | Memory editing, explicit sharing preview, request lifecycle, observation contribution and review, follow-up outcomes, care-circle removal, history, export, and knowledge contribution, review, search and withdrawal through local forms. |
+| Browser app | Memory editing, explicit sharing preview, request lifecycle, observation contribution and review, follow-up outcomes, care-circle removal, history, export, and knowledge contribution, review, search and withdrawal through local forms. A local setup console adds people and manages care-circle relationships. |
 
-The first release still needs broader accessibility testing, a verified identity-provider integration, model and voice adapters, reviewed knowledge cards, and care-partner evaluation. See the [technical plan](docs/technical-plan.md) for milestones and acceptance criteria.
+See the [documentation index](docs/README.md) for completed work, remaining release checks, and the ordered plan.
 
 ## Use a component
 
@@ -76,7 +76,8 @@ Actor IDs in this example are supplied by trusted application code. They are not
 - [Model suggestion boundary](docs/conversation.md)
 - [Durable delivery API and limits](docs/delivery.md)
 - [Knowledge pilot API and remaining requirements](docs/knowledge.md)
-- [Technical plan and implementation status](docs/technical-plan.md)
+- [Next release: complete local demonstration](docs/next-release-plan.md)
+- [Architecture](docs/architecture.md)
 - [API behavior and boundaries](docs/api.md)
 - [Session-bound application API](docs/application.md)
 - [Care needs and scenario coverage](docs/scenarios.md)

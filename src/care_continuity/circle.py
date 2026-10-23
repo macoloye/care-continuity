@@ -11,6 +11,14 @@ class CircleService:
 
     def add(self, *, actor: str, subject: str, member: str, role: str) -> None:
         ConsentService.require_owner(actor, subject)
+        self.set_membership(operator=actor, subject=subject, member=member, role=role)
+
+    def set_membership(self, *, operator: str, subject: str, member: str, role: str) -> None:
+        """Privileged setup path with the person's own effects, audited to the operator.
+
+        Reserved for the trusted local setup adapter. Membership remains only a
+        contribution boundary; it grants no access to care records.
+        """
         required(member, "member")
         if member == subject or role not in ("supporter", "worker", "coordinator"):
             raise ValueError("Choose a separate member and a supported role")
@@ -20,7 +28,7 @@ class CircleService:
                        ON CONFLICT(subject, member) DO UPDATE SET
                        role=excluded.role, added_at=excluded.added_at, removed_at=NULL""",
                        (subject, member, role, at))
-            self.store.event(subject, actor, member, "circle.added", at)
+            self.store.event(subject, operator, member, "circle.added", at)
 
     def require_member(self, subject: str, member: str) -> None:
         row = self.store.connection.execute(
@@ -31,6 +39,10 @@ class CircleService:
 
     def remove(self, *, actor: str, subject: str, member: str) -> None:
         ConsentService.require_owner(actor, subject)
+        self.end_membership(operator=actor, subject=subject, member=member)
+
+    def end_membership(self, *, operator: str, subject: str, member: str) -> None:
+        """Privileged setup path: the person's own revocations, audited to the operator."""
         with self.store.transaction() as db:
             self.require_member(subject, member)
             at = timestamp(self.clock())
@@ -42,8 +54,8 @@ class CircleService:
                                AND state NOT IN ('completed', 'cancelled')""", (subject, member)).fetchall()
             for row in rows:
                 db.execute("UPDATE requests SET state='cancelled', updated_at=? WHERE id=?", (at, row["id"]))
-                self.store.event(subject, actor, row["id"], "request.cancelled", at)
-            self.store.event(subject, actor, member, "circle.removed", at)
+                self.store.event(subject, operator, row["id"], "request.cancelled", at)
+            self.store.event(subject, operator, member, "circle.removed", at)
 
     def list_members(self, *, actor: str, subject: str) -> list[dict]:
         ConsentService.require_owner(actor, subject)
